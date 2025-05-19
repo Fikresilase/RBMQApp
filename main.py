@@ -1,245 +1,192 @@
 import sys
 import numpy as np
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QFileDialog, 
-    QLabel, QRadioButton, QVBoxLayout, QWidget, QMessageBox
+    QApplication, QWidget, QPushButton, QLabel, QVBoxLayout,
+    QFileDialog, QHBoxLayout, QMessageBox
 )
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
-from PIL import Image
-import struct
+import os
 
-# Median values for quantization (32 groups, width of 8)
+# Median values for quantization
 MEDIAN_VALUES = [
-    4, 12, 20, 28, 36, 44, 52, 60, 68, 76, 84, 92, 
-    100, 108, 116, 124, 132, 140, 148, 156, 164, 172, 
+    4, 12, 20, 28, 36, 44, 52, 60, 68, 76, 84, 92,
+    100, 108, 116, 124, 132, 140, 148, 156, 164, 172,
     180, 188, 196, 204, 212, 220, 228, 236, 244, 252
 ]
 
-# Create a lookup table for 5-bit → median value
-BIT_TO_MEDIAN = {i: median for i, median in enumerate(MEDIAN_VALUES)}
+# Create forward and reverse mappings
+FORWARD_MAP = {}
+REVERSE_MAP = {}
 
-def apply_median_quantization(img_array):
-    """Quantize image to nearest median value (32 levels)."""
-    quantized = np.zeros_like(img_array)
-    for i, median in enumerate(MEDIAN_VALUES):
-        lower = i * 8
-        upper = lower + 7
-        quantized[(img_array >= lower) & (img_array <= upper)] = median
-    return quantized
+for idx, val in enumerate(MEDIAN_VALUES):
+    FORWARD_MAP[val] = idx
 
-def pack_5bit_values(quantized_img):
-    """
-    Compress quantized image (8-bit) into tightly packed 5-bit values.
-    Returns a byte array.
-    """
-    # Convert median values to 5-bit indices (0-31)
-    median_to_bit = {median: i for i, median in enumerate(MEDIAN_VALUES)}
-    bit_indices = np.vectorize(median_to_bit.get)(quantized_img)
-    
-    # Flatten and pack into bytes (5 bits per value)
-    flat_bits = bit_indices.flatten()
-    packed_data = bytearray()
-    buffer = 0
-    bits_in_buffer = 0
-    
-    for value in flat_bits:
-        buffer = (buffer << 5) | value
-        bits_in_buffer += 5
-        if bits_in_buffer >= 8:
-            packed_data.append((buffer >> (bits_in_buffer - 8)) & 0xFF)
-            buffer &= (1 << (bits_in_buffer - 8)) - 1
-            bits_in_buffer -= 8
-    
-    # Handle remaining bits
-    if bits_in_buffer > 0:
-        packed_data.append((buffer << (8 - bits_in_buffer)) & 0xFF)
-    
-    return packed_data, quantized_img.shape
+for idx, val in enumerate(MEDIAN_VALUES):
+    REVERSE_MAP[idx] = val
 
-def unpack_5bit_values(packed_data, original_shape):
-    """
-    Unpack tightly packed 5-bit values back into 8-bit median values.
-    """
-    total_values = original_shape[0] * original_shape[1]
-    unpacked_bits = []
-    buffer = 0
-    bits_in_buffer = 0
-    
-    for byte in packed_data:
-        buffer = (buffer << 8) | byte
-        bits_in_buffer += 8
-        while bits_in_buffer >= 5 and len(unpacked_bits) < total_values:
-            value = (buffer >> (bits_in_buffer - 5)) & 0b11111
-            unpacked_bits.append(value)
-            bits_in_buffer -= 5
-            buffer &= (1 << bits_in_buffer) - 1
-    
-    # Map 5-bit values back to median
-    restored_img = np.array([BIT_TO_MEDIAN[v] for v in unpacked_bits], dtype=np.uint8)
-    return restored_img.reshape(original_shape)
 
-class ImageProcessor(QMainWindow):
+def find_closest_median(pixel_value):
+    """Find closest median value for a given pixel."""
+    idx = np.argmin(np.abs(np.array(MEDIAN_VALUES) - pixel_value))
+    return MEDIAN_VALUES[idx]
+
+
+def compress_image_array(image_array):
+    """Quantize and compress image array to 5-bit per pixel."""
+    height, width = image_array.shape
+    compressed_bits = []
+
+    for row in image_array:
+        for pixel in row:
+            # Find closest median
+            quantized_pixel = find_closest_median(pixel)
+            # Get index (0-31)
+            index = FORWARD_MAP[quantized_pixel]
+            # Convert to 5-bit binary string
+            bin_str = format(index, '05b')
+            compressed_bits.extend([int(bit) for bit in bin_str])
+
+    # Pack bits into bytes
+    packed_bytes = []
+    for i in range(0, len(compressed_bits), 8):
+        byte_bits = compressed_bits[i:i+8]
+        # Pad with zeros if needed
+        while len(byte_bits) < 8:
+            byte_bits.append(0)
+        byte_val = int(''.join(str(b) for b in byte_bits), 2)
+        packed_bytes.append(byte_val)
+
+    return bytes(packed_bytes), (height, width)
+
+
+def decompress_to_image_array(compressed_data, shape):
+    """Decompress data and rebuild image array."""
+    height, width = shape
+    bit_string = ''.join(f"{byte:08b}" for byte in compressed_data)
+    
+    # Extract 5-bit chunks
+    pixels = []
+    for i in range(0, len(bit_string), 5):
+        chunk = bit_string[i:i+5]
+        if len(chunk) < 5:
+            chunk += '0' * (5 - len(chunk))  # pad if needed
+        index = int(chunk, 2)
+        pixel_value = REVERSE_MAP.get(index, 0)
+        pixels.append(pixel_value)
+
+    # Reshape into image
+    image_array = np.array(pixels, dtype=np.uint8).reshape(height, width)
+    return image_array
+
+
+class ImageCompressorApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.image_path = None
-        self.processed_img = None
-        self.packed_data = None
-        self.original_shape = None
+        self.setWindowTitle("Median Quantization Image Compressor")
+        self.image_array = None
+        self.compressed_data = None
+        self.shape = None
         self.init_ui()
 
     def init_ui(self):
-        self.setWindowTitle("Advanced Image Quantizer")
-        self.setGeometry(100, 100, 800, 600)
-        
-        # Central widget and layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        
-        # Dark theme styling
-        self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; }
-            QLabel { 
-                font-size: 16px; 
-                color: #ffffff; 
-                margin: 10px;
-            }
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: #45a049; }
-            QRadioButton { 
-                font-size: 14px; 
-                color: #ffffff; 
-                margin: 5px;
-            }
-            #imageLabel { 
-                background-color: #333; 
-                border: 2px dashed #666; 
-                min-height: 300px;
-            }
-        """)
+        layout = QVBoxLayout()
 
-        # Widgets
-        self.label_instruction = QLabel("1. Select an image:")
-        self.btn_choose = QPushButton("Choose Image")
-        self.btn_choose.clicked.connect(self.choose_image)
-        
-        self.label_image = QLabel()
-        self.label_image.setObjectName("imageLabel")
-        self.label_image.setAlignment(Qt.AlignCenter)
-        
-        self.label_options = QLabel("2. Choose processing method:")
-        self.option_quantize = QRadioButton("Median Quantization (32 colors)")
-        self.option_bit_reduce = QRadioButton("Quantization + Bit Reduction (5-bit packed)")
-        self.option_revert = QRadioButton("Revert Bit Reduction (5-bit → 8-bit median)")
-        
-        self.btn_process = QPushButton("Process & Save Image")
-        self.btn_process.clicked.connect(self.process_image)
-        
-        # Add widgets to layout
-        layout.addWidget(self.label_instruction)
-        layout.addWidget(self.btn_choose)
-        layout.addWidget(self.label_image)
-        layout.addWidget(self.label_options)
-        layout.addWidget(self.option_quantize)
-        layout.addWidget(self.option_bit_reduce)
-        layout.addWidget(self.option_revert)
-        layout.addWidget(self.btn_process)
+        self.label = QLabel("Load a grayscale image or compressed file")
+        self.label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.label)
 
-    def choose_image(self):
-        """Open file dialog to select an image."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Image", "", 
-            "Images (*.png *.jpg *.jpeg);;All Files (*)"
-        )
-        if file_path:
-            self.image_path = file_path
-            pixmap = QPixmap(file_path)
-            self.label_image.setPixmap(
-                pixmap.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
+        btn_layout = QHBoxLayout()
+        self.load_img_btn = QPushButton("Load Image")
+        self.load_img_btn.clicked.connect(self.load_image)
+        btn_layout.addWidget(self.load_img_btn)
 
-    def process_image(self):
-        """Process the image based on selected option."""
-        if not self.image_path:
-            QMessageBox.warning(self, "Error", "Please select an image first!")
+        self.compress_btn = QPushButton("Compress & Save")
+        self.compress_btn.clicked.connect(self.compress_and_save)
+        self.compress_btn.setEnabled(False)
+        btn_layout.addWidget(self.compress_btn)
+
+        self.load_comp_btn = QPushButton("Load Compressed File")
+        self.load_comp_btn.clicked.connect(self.load_compressed_file)
+        btn_layout.addWidget(self.load_comp_btn)
+
+        self.decompress_btn = QPushButton("Decompress Image")
+        self.decompress_btn.clicked.connect(self.decompress_and_show)
+        self.decompress_btn.setEnabled(False)
+        btn_layout.addWidget(self.decompress_btn)
+
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+
+    def load_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.jpg *.bmp)")
+        if path:
+            image = QImage(path)
+            if image.format() != QImage.Format_Grayscale8:
+                image = image.convertToFormat(QImage.Format_Grayscale8)
+
+            self.image_array = np.zeros((image.height(), image.width()), dtype=np.uint8)
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    pixel = qGray(image.pixel(x, y))
+                    self.image_array[y, x] = pixel
+
+            self.label.setText("Image loaded. Ready to compress.")
+            self.compress_btn.setEnabled(True)
+
+    def compress_and_save(self):
+        if self.image_array is None:
             return
-        
-        try:
-            img = Image.open(self.image_path)
-            img_array = np.array(img)
-            
-            if img_array.ndim == 2:  # Convert grayscale to RGB
-                img_array = np.stack([img_array] * 3, axis=-1)
-            
-            r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
-            
-            if self.option_quantize.isChecked():
-                r_processed = apply_median_quantization(r)
-                g_processed = apply_median_quantization(g)
-                b_processed = apply_median_quantization(b)
-                processed_img = np.stack([r_processed, g_processed, b_processed], axis=-1)
-                self.processed_img = Image.fromarray(processed_img.astype(np.uint8))
-                
-            elif self.option_bit_reduce.isChecked():
-                r_quant = apply_median_quantization(r)
-                g_quant = apply_median_quantization(g)
-                b_quant = apply_median_quantization(b)
-                
-                # Pack each channel into 5-bit binary
-                r_packed, r_shape = pack_5bit_values(r_quant)
-                g_packed, g_shape = pack_5bit_values(g_quant)
-                b_packed, b_shape = pack_5bit_values(b_quant)
-                
-                # Save packed data (for demonstration, we'll just store it)
-                self.packed_data = (r_packed, g_packed, b_packed)
-                self.original_shape = r_shape  # Assuming all channels have same shape
-                
-                # For visualization, we can unpack it again (just to show in UI)
-                r_unpacked = unpack_5bit_values(r_packed, r_shape)
-                g_unpacked = unpack_5bit_values(g_packed, g_shape)
-                b_unpacked = unpack_5bit_values(b_packed, b_shape)
-                
-                processed_img = np.stack([r_unpacked, g_unpacked, b_unpacked], axis=-1)
-                self.processed_img = Image.fromarray(processed_img.astype(np.uint8))
-                
-            elif self.option_revert.isChecked():
-                if not hasattr(self, 'packed_data'):
-                    QMessageBox.warning(self, "Error", "No packed data to revert!")
-                    return
-                
-                r_packed, g_packed, b_packed = self.packed_data
-                r_restored = unpack_5bit_values(r_packed, self.original_shape)
-                g_restored = unpack_5bit_values(g_packed, self.original_shape)
-                b_restored = unpack_5bit_values(b_packed, self.original_shape)
-                
-                processed_img = np.stack([r_restored, g_restored, b_restored], axis=-1)
-                self.processed_img = Image.fromarray(processed_img.astype(np.uint8))
-                
-            else:
-                QMessageBox.warning(self, "Error", "Please select a processing method!")
-                return
-            
-            # Save the image
-            save_path, _ = QFileDialog.getSaveFileName(
-                self, "Save Image", "", 
-                "PNG (*.png);;JPEG (*.jpg);;All Files (*)"
-            )
-            if save_path:
-                self.processed_img.save(save_path)
-                QMessageBox.information(self, "Success", f"Image saved to:\n{save_path}")
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"An error occurred:\n{str(e)}")
+        self.compressed_data, self.shape = compress_image_array(self.image_array)
+        save_path, _ = QFileDialog.getSaveFileName(self, "Save Compressed File", "", "Binary Files (*.bin)")
+        if save_path:
+            with open(save_path, 'wb') as f:
+                f.write(self.compressed_data)
+            QMessageBox.information(self, "Success", "Image compressed and saved successfully.")
 
-if __name__ == "__main__":
+    def load_compressed_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open Compressed File", "", "Binary Files (*.bin)")
+        if path:
+            with open(path, 'rb') as f:
+                self.compressed_data = f.read()
+            # Ask for dimensions
+            dim, ok = QInputDialog.getText(self, "Image Dimensions", "Enter image dimensions (widthxheight):")
+            if ok and 'x' in dim:
+                try:
+                    w, h = map(int, dim.split('x'))
+                    self.shape = (h, w)
+                    self.label.setText("Compressed file loaded. Ready to decompress.")
+                    self.decompress_btn.setEnabled(True)
+                except Exception as e:
+                    print(e)
+                    QMessageBox.warning(self, "Error", "Invalid dimensions entered.")
+
+    def decompress_and_show(self):
+        if self.compressed_data is None or self.shape is None:
+            return
+        image_array = decompress_to_image_array(self.compressed_data, self.shape)
+        height, width = image_array.shape
+        q_image = QImage(image_array.data, width, height, width, QImage.Format_Grayscale8)
+        pixmap = QPixmap.fromImage(q_image).scaled(400, 400, Qt.KeepAspectRatio)
+        label = QLabel()
+        label.setPixmap(pixmap)
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("Reconstructed Image")
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setFixedSize(500, 500)
+        msg_box.layout().addWidget(label)
+        msg_box.exec_()
+
+
+def qGray(rgb):
+    r = (rgb >> 16) & 0xFF
+    g = (rgb >> 8) & 0xFF
+    b = rgb & 0xFF
+    return int(0.299 * r + 0.587 * g + 0.114 * b)
+
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = ImageProcessor()
+    window = ImageCompressorApp()
     window.show()
     sys.exit(app.exec_())
