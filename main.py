@@ -6,11 +6,10 @@ from PyQt5.QtWidgets import (
     QProgressBar, QCheckBox, QHBoxLayout
 )
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt
 from PIL import Image
 import time
 import json
-from io import BytesIO
 
 # Median values for quantization (32 groups)
 MEDIAN_VALUES = [
@@ -23,79 +22,63 @@ MEDIAN_VALUES = [
 MEDIAN_TO_INDEX = {median: idx for idx, median in enumerate(MEDIAN_VALUES)}
 INDEX_TO_MEDIAN = {idx: median for idx, median in enumerate(MEDIAN_VALUES)}
 
-class ProcessingThread(QThread):
-    progress_updated = pyqtSignal(int)
-    processing_complete = pyqtSignal(object)
-    error_occurred = pyqtSignal(str)
-
-    def __init__(self, process_func, *args):
-        super().__init__()
-        self.process_func = process_func
-        self.args = args
-
-    def run(self):
-        try:
-            result = self.process_func(*self.args)
-            self.processing_complete.emit(result)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
-def apply_median_quantization(img_array, progress_callback=None):
+def apply_median_quantization(img_array):
     """Quantize image to nearest median value (32 levels)."""
     quantized = np.zeros_like(img_array)
-    total_pixels = img_array.size
-    processed = 0
-    
-    for i, median in enumerate(MEDIAN_VALUES):
+    for median in MEDIAN_VALUES:
         lower = median - 4
         upper = median + 3
-        mask = (img_array >= lower) & (img_array <= upper)
-        quantized[mask] = median
-        processed += np.sum(mask)
-        
-        if progress_callback and i % 4 == 0:  # Update progress every 4 steps
-            progress_callback(int(processed / total_pixels * 100))
-    
+        quantized[(img_array >= lower) & (img_array <= upper)] = median
     return quantized
 
 def reduce_to_5bit(quantized_img):
-    """Convert median values to 5-bit indices (0-31) using numpy vectorization."""
+    """Convert median values to 5-bit indices (0-31)."""
     return np.vectorize(MEDIAN_TO_INDEX.get)(quantized_img)
 
 def pack_5bit_to_bytes(five_bit_img):
-    """Optimized packing of 5-bit indices into bytes using numpy bit operations."""
+    """Pack 5-bit indices into tightly packed bytes."""
     flat = five_bit_img.flatten()
-    # Pad with zeros if length not divisible by 8
-    pad_length = (8 - (len(flat) % 8)) % 8
-    padded = np.pad(flat, (0, pad_length), 'constant')
+    # Pad with zeros if length not divisible by 5
+    pad_length = (5 - (len(flat) % 5)) % 5  # Fixed parenthesis
+    padded = np.pad(flat, (0, pad_length), mode='constant')  # Fixed np.pad call
     
-    # Reshape to group 8 values (40 bits) per row
-    grouped = padded.reshape(-1, 8)
+    # Reshape to group 5 values (25 bits)
+    grouped = padded.reshape(-1, 5)
     
-    # Convert each group to 5 bytes (40 bits)
-    packed = np.zeros((grouped.shape[0], 5), dtype=np.uint8)
-    for i in range(5):
-        packed[:, i] = np.left_shift(grouped[:, i*8//5], (i*8) % 5) | \
-                      np.right_shift(grouped[:, i*8//5 + 1], 5 - (i*8) % 5)
+    # Convert each group to bytes
+    packed = bytearray()
+    for group in grouped:
+        # Combine 5 5-bit values into 25 bits
+        combined = 0
+        for i, val in enumerate(group):
+            combined |= val << (20 - i*5)
+        
+        # Split into 3 bytes (24 bits) + 1 byte (remaining 1 bit)
+        packed.append((combined >> 16) & 0xFF)
+        packed.append((combined >> 8) & 0xFF)
+        packed.append(combined & 0xFF)
+        if pad_length > 0:
+            packed.append((combined >> 24) & 0x01)
     
-    return packed.tobytes(), five_bit_img.shape, pad_length
+    return bytes(packed), five_bit_img.shape, pad_length
 
 def unpack_bytes_to_5bit(packed_data, original_shape, pad_length):
-    """Optimized unpacking of bytes back to 5-bit indices."""
-    packed_arr = np.frombuffer(packed_data, dtype=np.uint8)
-    packed_arr = packed_arr.reshape(-1, 5)
-    
-    # Reconstruct 5-bit values
-    unpacked = np.zeros((packed_arr.shape[0], 8), dtype=np.uint8)
-    for i in range(5):
-        shift = (i*8) % 5
-        unpacked[:, i*8//5] |= np.right_shift(packed_arr[:, i], shift)
-        if i*8//5 + 1 < 8:
-            unpacked[:, i*8//5 + 1] |= np.left_shift(packed_arr[:, i], 5 - shift)
-    
-    # Remove padding and reshape
+    """Unpack bytes back to 5-bit indices."""
     total_values = original_shape[0] * original_shape[1]
-    return unpacked.flatten()[:total_values].reshape(original_shape)
+    unpacked = []
+    buffer = 0
+    bits_in_buffer = 0
+    
+    for byte in packed_data:
+        buffer = (buffer << 8) | byte
+        bits_in_buffer += 8
+        while bits_in_buffer >= 5 and len(unpacked) < total_values:
+            value = (buffer >> (bits_in_buffer - 5)) & 0b11111
+            unpacked.append(value)
+            bits_in_buffer -= 5
+            buffer &= (1 << bits_in_buffer) - 1
+    
+    return np.array(unpacked, dtype=np.uint8).reshape(original_shape)
 
 class ImageProcessor(QMainWindow):
     def __init__(self):
@@ -104,13 +87,14 @@ class ImageProcessor(QMainWindow):
         self.processed_img = None
         self.packed_data = None
         self.original_shape = None
+        self.pad_length = 0
         self.is_color = False
         self.convert_to_grayscale = False
         self.init_ui()
 
     def init_ui(self):
         self.setWindowTitle("Advanced Image Quantizer")
-        self.setGeometry(100, 100, 900, 700)
+        self.setGeometry(100, 100, 800, 700)
         
         # Central widget and layout
         central_widget = QWidget()
@@ -153,13 +137,9 @@ class ImageProcessor(QMainWindow):
         self.grayscale_checkbox = QCheckBox("Convert to grayscale before processing")
         self.grayscale_checkbox.stateChanged.connect(self.toggle_grayscale)
         
-        # Preview checkbox
-        self.preview_checkbox = QCheckBox("Show preview (slower but shows intermediate results)")
-        
         # Options layout
         options_layout = QHBoxLayout()
         options_layout.addWidget(self.grayscale_checkbox)
-        options_layout.addWidget(self.preview_checkbox)
         
         self.label_options = QLabel("2. Choose processing method:")
         self.option_quantize = QRadioButton("Median Quantization (32 colors)")
@@ -229,7 +209,8 @@ class ImageProcessor(QMainWindow):
                 )
             else:
                 self.compression_label.setText("Estimated compression ratio: -")
-        except:
+        except Exception as e:
+            print(f"Error estimating compression: {e}")
             self.compression_label.setText("Could not estimate compression")
 
     def process_image(self):
@@ -267,12 +248,12 @@ class ImageProcessor(QMainWindow):
             # Save the image
             save_path, _ = QFileDialog.getSaveFileName(
                 self, "Save Image", "", 
-                "PNG (*.png);;JPEG (*.jpg);;Custom Format (*.iqf);;All Files (*)"
+                "PNG (*.png);;JPEG (*.jpg);;Binary File (*.bin);;All Files (*)"
             )
             
             if save_path:
-                if save_path.endswith('.iqf'):
-                    self.save_custom_format(save_path)
+                if save_path.endswith('.bin'):
+                    self.save_binary_file(save_path)
                 else:
                     self.processed_img.save(save_path)
                 
@@ -291,57 +272,104 @@ class ImageProcessor(QMainWindow):
         """Process median quantization."""
         if self.is_color:
             quantized = np.stack([
-                apply_median_quantization(img_array[:, :, 0], lambda v: self.update_progress(v/3)),
-                apply_median_quantization(img_array[:, :, 1], lambda v: self.update_progress(33 + v/3)),
-                apply_median_quantization(img_array[:, :, 2], lambda v: self.update_progress(66 + v/3))
-            ], axis=-1)
-        else:
-            quantized = apply_median_quantization(img_array, self.update_progress)
-        
-        self.processed_img = Image.fromarray(quantized.astype(np.uint8))
-        
-        if self.preview_checkbox.isChecked():
-            preview = Image.fromarray(quantized.astype(np.uint8))
-            preview = preview.resize((400, 400), Image.LANCZOS)
-            self.label_image.setPixmap(QPixmap.fromImage(preview.toqimage()))
-
-    def process_bit_reduction(self, img_array):
-        """Process bit reduction."""
-        if self.is_color:
-            # Process each channel in parallel would be ideal, but for simplicity we do sequentially
-            quantized = np.stack([
                 apply_median_quantization(img_array[:, :, 0]),
                 apply_median_quantization(img_array[:, :, 1]),
                 apply_median_quantization(img_array[:, :, 2])
             ], axis=-1)
-            
-            packed_r, shape_r, pad_r = pack_5bit_to_bytes(reduce_to_5bit(quantized[:, :, 0]))
-            packed_g, shape_g, pad_g = pack_5bit_to_bytes(reduce_to_5bit(quantized[:, :, 1]))
-            packed_b, shape_b, pad_b = pack_5bit_to_bytes(reduce_to_5bit(quantized[:, :, 2]))
-            
-            self.packed_data = (packed_r, packed_g, packed_b)
-            self.original_shape = shape_r
-            self.pad_length = (pad_r, pad_g, pad_b)
-            
-            # For display, unpack one channel
-            unpacked = unpack_bytes_to_5bit(packed_r, shape_r, pad_r)
-            restored = np.vectorize(INDEX_TO_MEDIAN.get)(unpacked)
-            self.processed_img = Image.fromarray(restored.astype(np.uint8))
         else:
             quantized = apply_median_quantization(img_array)
-            five_bit = reduce_to_5bit(quantized)
-            self.packed_data, self.original_shape, self.pad_length = pack_5bit_to_bytes(five_bit)
-            
-            # For display
-            unpacked = unpack_bytes_to_5bit(self.packed_data, self.original_shape, self.pad_length)
-            restored = np.vectorize(INDEX_TO_MEDIAN.get)(unpacked)
-            self.processed_img = Image.fromarray(restored.astype(np.uint8))
         
+        self.processed_img = Image.fromarray(quantized.astype(np.uint8))
         self.update_progress(100)
-        
-        if self.preview_checkbox.isChecked():
-            preview = self.processed_img.resize((400, 400), Image.LANCZOS)
-            self.label_image.setPixmap(QPixmap.fromImage(preview.toqimage()))
+
+    def process_bit_reduction(self, img_array):
+        """Process bit reduction with step-by-step display and binary file saving."""
+        try:
+            print("\n=== Starting Quantization + Bit Reduction Process ===")
+            
+            # 1. Apply Median Quantization
+            print("\nStep 1: Applying Median Quantization...")
+            if self.is_color:
+                quantized = np.stack([
+                    apply_median_quantization(img_array[:, :, 0]),
+                    apply_median_quantization(img_array[:, :, 1]),
+                    apply_median_quantization(img_array[:, :, 2])
+                ], axis=-1)
+                # For display, we'll just show the red channel
+                channel_quantized = quantized[:, :, 0]
+            else:
+                quantized = apply_median_quantization(img_array)
+                channel_quantized = quantized
+            
+            # Display first 10 pixel values and their binary
+            print("\nQuantized values (first 10 pixels):")
+            for i in range(min(10, channel_quantized.size)):
+                val = channel_quantized.flat[i]
+                print(f"Pixel {i}: {val} (binary: {val:08b})")
+            
+            # 2. Map to 5-bit indices (remove 3 LSBs)
+            print("\nStep 2: Mapping to 5-bit indices (removing 3 LSBs)...")
+            five_bit = reduce_to_5bit(quantized)
+            if self.is_color:
+                channel_five_bit = five_bit[:, :, 0]
+            else:
+                channel_five_bit = five_bit
+            
+            # Display first 10 mapped values and their binary
+            print("\n5-bit mapped values (first 10 pixels):")
+            for i in range(min(10, channel_five_bit.size)):
+                val = channel_five_bit.flat[i]
+                print(f"Pixel {i}: {val} (binary: {val:05b})")
+            
+            # 3. Pack into bitstream
+            print("\nStep 3: Packing into bitstream...")
+            if self.is_color:
+                packed_r, shape_r, pad_r = pack_5bit_to_bytes(five_bit[:, :, 0])
+                packed_g, shape_g, pad_g = pack_5bit_to_bytes(five_bit[:, :, 1])
+                packed_b, shape_b, pad_b = pack_5bit_to_bytes(five_bit[:, :, 2])
+                self.packed_data = (packed_r, packed_g, packed_b)
+                self.original_shape = shape_r
+                self.pad_length = (pad_r, pad_g, pad_b)
+                packed = packed_r  # For display, use red channel
+            else:
+                self.packed_data, self.original_shape, self.pad_length = pack_5bit_to_bytes(five_bit)
+                packed = self.packed_data
+            
+            # Display first 10 bytes of packed data
+            print("\nPacked data (first 10 bytes):")
+            for i in range(min(10, len(packed))):
+                print(f"Byte {i}: {packed[i]:08b}")
+            
+            # 4. Save to .bin file automatically
+            print("\nStep 4: Saving to binary file...")
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            bin_filename = f"bitreduced_{timestamp}.bin"
+            
+            with open(bin_filename, 'wb') as f:
+                if self.is_color:
+                    for channel in self.packed_data:
+                        f.write(channel)
+                else:
+                    f.write(self.packed_data)
+            
+            print(f"Saved packed data to {bin_filename}")
+            
+            # For display, unpack one channel
+            if self.is_color:
+                unpacked = unpack_bytes_to_5bit(packed_r, shape_r, pad_r)
+                restored = np.vectorize(INDEX_TO_MEDIAN.get)(unpacked)
+            else:
+                unpacked = unpack_bytes_to_5bit(self.packed_data, self.original_shape, self.pad_length)
+                restored = np.vectorize(INDEX_TO_MEDIAN.get)(unpacked)
+            
+            self.processed_img = Image.fromarray(restored.astype(np.uint8))
+            self.update_progress(100)
+            
+            print("\n=== Process Completed Successfully ===")
+            
+        except Exception as e:
+            print(f"\n!!! Error in bit reduction process: {str(e)}")
+            raise
 
     def process_reversion(self):
         """Process reversion from packed data."""
@@ -364,33 +392,14 @@ class ImageProcessor(QMainWindow):
         
         self.processed_img = Image.fromarray(restored.astype(np.uint8))
         self.update_progress(100)
-        
-        if self.preview_checkbox.isChecked():
-            preview = self.processed_img.resize((400, 400), Image.LANCZOS)
-            self.label_image.setPixmap(QPixmap.fromImage(preview.toqimage()))
 
-    def save_custom_format(self, file_path):
-        """Save in custom IQF (Image Quantization Format)."""
-        metadata = {
-            'original_shape': self.original_shape,
-            'is_color': self.is_color,
-            'pad_length': self.pad_length if hasattr(self, 'pad_length') else 0,
-            'version': '1.0'
-        }
-        
+    def save_binary_file(self, file_path):
+        """Save packed data to binary file."""
         with open(file_path, 'wb') as f:
-            # Write metadata as JSON
-            metadata_bytes = json.dumps(metadata).encode('utf-8')
-            f.write(len(metadata_bytes).to_bytes(4, 'big'))
-            f.write(metadata_bytes)
-            
-            # Write packed data
             if self.is_color:
                 for channel in self.packed_data:
-                    f.write(len(channel).to_bytes(4, 'big'))
                     f.write(channel)
             else:
-                f.write(len(self.packed_data).to_bytes(4, 'big'))
                 f.write(self.packed_data)
 
 if __name__ == "__main__":
