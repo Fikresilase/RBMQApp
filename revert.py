@@ -1,143 +1,173 @@
 import sys
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QFileDialog, QLabel, QVBoxLayout, QWidget, QMessageBox
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QFileDialog, 
+                            QLabel, QVBoxLayout, QWidget, QTextEdit, QMessageBox)
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 from PIL import Image
 
-def revert_bit_reduction(color_channel):
-    """Revert from bit reduction (5 bits) to original color channel."""
-    reverted_channel = np.left_shift(color_channel, 3)  # Revert the bit depth reduction
-    return reverted_channel
-
-class ColorImageReverter(QMainWindow):
+class BitViewerApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.initUI()
-
-    
-
-    def initUI(self):
-        self.setWindowTitle('Color Image Reverter App')
-        self.setGeometry(100, 100, 800, 600)  # Larger window size
-
+        self.setWindowTitle('Image Bit Viewer & Processor')
+        self.setGeometry(100, 100, 800, 800)
+        
+        # Main widget and layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-
         self.layout = QVBoxLayout(self.central_widget)
-
-        # Dark theme styling
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e1e;
-            }
-            QLabel {
-                font-size: 18px;
-                font-weight: bold;
-                color: #ffffff;
-            }
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border-radius: 10px;
-                padding: 12px;
-                font-size: 16px;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            #imageLabel {
-                background-color: #333;
-                border: 2px dashed #666;
-                min-width: 250px;
-                min-height: 250px;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            }
-            QMessageBox {
-                color: white;
-            }
-        """)
-
-        # Add some spacing and centering for large screens
-        self.layout.setSpacing(20)
-        self.layout.setContentsMargins(50, 50, 50, 50)
-
-        self.label_instruction = QLabel('1. Select a previously processed color image (bit-reduced)', self)
-        self.label_instruction.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.label_instruction)
-
-        self.btn_choose = QPushButton('Choose Image', self)
-        self.btn_choose.clicked.connect(self.choose_image)
-        self.layout.addWidget(self.btn_choose, alignment=Qt.AlignCenter)
-
-        self.label_image = QLabel(self)
-        self.label_image.setObjectName("imageLabel")
-        self.label_image.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.label_image, alignment=Qt.AlignCenter)
-
-        self.btn_revert = QPushButton('Revert and Save Image', self)
-        self.btn_revert.clicked.connect(self.revert_and_save_image)
-        self.layout.addWidget(self.btn_revert, alignment=Qt.AlignCenter)
-
-        self.image_path = None
-
-    def choose_image(self):
-        options = QFileDialog.Options()
-        self.image_path, _ = QFileDialog.getOpenFileName(self, 'Select Image', '', 'Image Files (*.png *.jpg *.jpeg);;All Files (*)', options=options)
-        if self.image_path:
-            pixmap = QPixmap(self.image_path)
-            self.label_image.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio))  # Larger size for bigger screens
-
-    
-
-
-    def revert_and_save_image(self):
-        if not self.image_path:
-            QMessageBox.warning(self, 'Error', 'Please select an image first.')
-            return
-
-        img = Image.open(self.image_path)
-        img_array = np.array(img)  # Convert image to array
         
-        if len(img_array.shape) == 3:  # Check if image has color channels (RGB)
-            # Separate the channels
-            r_channel = img_array[:, :, 0]
-            g_channel = img_array[:, :, 1]
-            b_channel = img_array[:, :, 2]
+        # Image display
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("border: 2px solid gray;")
+        self.layout.addWidget(self.image_label)
+        
+        # Console output
+        self.console = QTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setMaximumHeight(200)
+        self.layout.addWidget(self.console)
+        
+        # Buttons
+        self.load_button = QPushButton('Load Image')
+        self.load_button.clicked.connect(self.load_image)
+        
+        self.process_button = QPushButton('Process Bits (Left Shift 3)')
+        self.process_button.clicked.connect(self.process_bits)
+        self.process_button.setEnabled(False)
+        
+        self.save_button = QPushButton('Save Processed Image')
+        self.save_button.clicked.connect(self.save_image)
+        self.save_button.setEnabled(False)
+        
+        button_layout = QVBoxLayout()
+        button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.process_button)
+        button_layout.addWidget(self.save_button)
+        self.layout.addLayout(button_layout)
+        
+        # Image data storage
+        self.original_image = None
+        self.processed_image = None
+        self.bit_values = None
+        self.shifted_values = None
 
-            # Revert the bit reduction for each channel
-            reverted_r = revert_bit_reduction(r_channel)
-            reverted_g = revert_bit_reduction(g_channel)
-            reverted_b = revert_bit_reduction(b_channel)
+    def load_image(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 'Select Image', '', 
+            'Image Files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)', options=options)
+        
+        if file_path:
+            try:
+                # Load image using PIL (handles all formats)
+                img = Image.open(file_path)
+                self.original_image = np.array(img)
+                
+                # Display image
+                pixmap = QPixmap(file_path)
+                self.image_label.setPixmap(pixmap.scaled(600, 400, Qt.KeepAspectRatio))
+                
+                # Get and display bit values (first 10x10 pixels for demo)
+                height, width = self.original_image.shape[:2]
+                sample_size = min(10, height, width)
+                
+                # For RGB images, take first channel; for grayscale use as-is
+                if len(self.original_image.shape) == 3:
+                    sample_data = self.original_image[:sample_size, :sample_size, 0]
+                else:
+                    sample_data = self.original_image[:sample_size, :sample_size]
+                
+                self.bit_values = sample_data
+                self.display_bit_values(sample_data, "Original Bit Values (Sample):")
+                
+                self.process_button.setEnabled(True)
+                self.processed_image = None
+                self.save_button.setEnabled(False)
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f'Failed to load image: {str(e)}')
 
-            # Merge the channels back together
-            reverted_img_array = np.stack((reverted_r, reverted_g, reverted_b), axis=2)
+    def display_bit_values(self, data, title):
+        """Display bit values in the console"""
+        self.console.append(f"\n{title}\n" + "="*40)
+        
+        # For 2D array (grayscale or single channel)
+        if len(data.shape) == 2:
+            for row in data:
+                row_str = ' '.join([f'{pixel:03d}' for pixel in row])
+                self.console.append(row_str)
+        # For RGB (we're just showing first channel)
         else:
-            QMessageBox.warning(self, 'Error', 'The selected image is not a color image.')
+            for row in data:
+                channel_str = ' '.join([f'{pixel[0]:03d}' for pixel in row])
+                self.console.append(channel_str)
+
+    def process_bits(self):
+        if self.original_image is None:
             return
+            
+        try:
+            # Process the image (left shift 3 bits)
+            if len(self.original_image.shape) == 3:  # RGB
+                self.processed_image = np.left_shift(self.original_image[:, :, :3], 3)
+                sample_data = self.processed_image[:10, :10, 0]  # Sample first channel
+            else:  # Grayscale
+                self.processed_image = np.left_shift(self.original_image, 3)
+                sample_data = self.processed_image[:10, :10]
+            
+            # Clip values to 0-255 range
+            self.processed_image = np.clip(self.processed_image, 0, 255).astype(np.uint8)
+            
+            # Display shifted values
+            self.shifted_values = sample_data
+            self.display_bit_values(sample_data, "Shifted Bit Values (Sample):")
+            
+            # Show processed image preview
+            if len(self.processed_image.shape) == 3:
+                img = Image.fromarray(self.processed_image)
+            else:
+                img = Image.fromarray(self.processed_image).convert('L')
+                
+            img.save('temp_processed.png')  # Temporary save for preview
+            self.image_label.setPixmap(QPixmap('temp_processed.png').scaled(600, 400, Qt.KeepAspectRatio))
+            
+            self.save_button.setEnabled(True)
+            
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Processing failed: {str(e)}')
 
-        reverted_img = Image.fromarray(reverted_img_array.astype(np.uint8))  # Convert back to an image
-
-        save_as, _ = QFileDialog.getSaveFileName(self, 'Save Image', '', 'PNG files (*.png);;JPEG files (*.jpeg);;All Files (*)')
-        if save_as:
-            reverted_img.save(save_as)
-            QMessageBox.information(self, 'Success', f'Image saved as {save_as}')
+    def save_image(self):
+        if self.processed_image is None:
+            return
+            
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, 'Save Processed Image', '', 
+            'PNG Image (*.png);;JPEG Image (*.jpg);;BMP Image (*.bmp);;TIFF Image (*.tiff)', 
+            options=options)
+        
+        if file_path:
+            try:
+                if len(self.processed_image.shape) == 3:
+                    img = Image.fromarray(self.processed_image)
+                else:
+                    img = Image.fromarray(self.processed_image).convert('L')
+                
+                # Determine format from extension
+                if file_path.lower().endswith('.jpg') or file_path.lower().endswith('.jpeg'):
+                    img.save(file_path, 'JPEG', quality=95)
+                else:
+                    img.save(file_path)
+                
+                QMessageBox.information(self, 'Success', 'Image saved successfully!')
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f'Failed to save image: {str(e)}')
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    ex = ColorImageReverter()
-    ex.show()
+    window = BitViewerApp()
+    window.show()
     sys.exit(app.exec_())
-
-    def choose_image(self):
-        try:
-            options = QFileDialog.Options()
-            self.image_path, _ = QFileDialog.getOpenFileName(self, 'Select Image', '', 'Image Files (*.png *.jpg *.jpeg);;All Files (*)', options=options)
-            if self.image_path:
-                pixmap = QPixmap(self.image_path)
-            self.label_image.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio))  # Larger size for bigger screens
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f"Failed to load image: {e}")
