@@ -1,173 +1,190 @@
 import sys
 import numpy as np
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QFileDialog, 
-                            QLabel, QVBoxLayout, QWidget, QTextEdit, QMessageBox)
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, 
+                            QFileDialog, QLabel, QVBoxLayout, QWidget, 
+                            QTextEdit, QHBoxLayout)
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
 from PIL import Image
 
-class BitViewerApp(QMainWindow):
+class BitImageProcessor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('Image Bit Viewer & Processor')
-        self.setGeometry(100, 100, 800, 800)
+        self.initUI()
+        self.image_path = None
+        self.original_image = None
+        self.processed_image = None
         
-        # Main widget and layout
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.layout = QVBoxLayout(self.central_widget)
+    def initUI(self):
+        self.setWindowTitle('Bit Image Processor')
+        self.setGeometry(100, 100, 900, 700)
         
-        # Image display
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        layout = QVBoxLayout()
+        
+        # Image display area
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setStyleSheet("border: 2px solid gray;")
-        self.layout.addWidget(self.image_label)
+        self.image_label.setMinimumSize(400, 300)
         
         # Console output
         self.console = QTextEdit()
         self.console.setReadOnly(True)
-        self.console.setMaximumHeight(200)
-        self.layout.addWidget(self.console)
+        self.console.setStyleSheet("font-family: monospace;")
         
         # Buttons
-        self.load_button = QPushButton('Load Image')
-        self.load_button.clicked.connect(self.load_image)
+        btn_layout = QHBoxLayout()
         
-        self.process_button = QPushButton('Process Bits (Left Shift 3)')
-        self.process_button.clicked.connect(self.process_bits)
-        self.process_button.setEnabled(False)
+        self.btn_load = QPushButton('Load Image')
+        self.btn_load.clicked.connect(self.load_image)
         
-        self.save_button = QPushButton('Save Processed Image')
-        self.save_button.clicked.connect(self.save_image)
-        self.save_button.setEnabled(False)
+        self.btn_process = QPushButton('Process Bits')
+        self.btn_process.clicked.connect(self.process_bits)
+        self.btn_process.setEnabled(False)
         
-        button_layout = QVBoxLayout()
-        button_layout.addWidget(self.load_button)
-        button_layout.addWidget(self.process_button)
-        button_layout.addWidget(self.save_button)
-        self.layout.addLayout(button_layout)
+        self.btn_save = QPushButton('Save Processed Image')
+        self.btn_save.clicked.connect(self.save_image)
+        self.btn_save.setEnabled(False)
         
-        # Image data storage
-        self.original_image = None
-        self.processed_image = None
-        self.bit_values = None
-        self.shifted_values = None
-
+        btn_layout.addWidget(self.btn_load)
+        btn_layout.addWidget(self.btn_process)
+        btn_layout.addWidget(self.btn_save)
+        
+        # Add widgets to main layout
+        layout.addWidget(self.image_label)
+        layout.addWidget(self.console)
+        layout.addLayout(btn_layout)
+        
+        central_widget.setLayout(layout)
+        
     def load_image(self):
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getOpenFileName(
             self, 'Select Image', '', 
-            'Image Files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)', options=options)
-        
+            'Image Files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)', 
+            options=options)
+            
         if file_path:
+            self.image_path = file_path
             try:
-                # Load image using PIL (handles all formats)
-                img = Image.open(file_path)
-                self.original_image = np.array(img)
+                # Load with PIL first to handle all formats
+                pil_img = Image.open(file_path)
+                self.original_image = np.array(pil_img)
                 
-                # Display image
-                pixmap = QPixmap(file_path)
-                self.image_label.setPixmap(pixmap.scaled(600, 400, Qt.KeepAspectRatio))
+                # Convert to QImage for display
+                if pil_img.mode == 'RGB':
+                    qimage = QImage(self.original_image.data, 
+                                   self.original_image.shape[1], 
+                                   self.original_image.shape[0], 
+                                   QImage.Format_RGB888)
+                elif pil_img.mode == 'RGBA':
+                    qimage = QImage(self.original_image.data, 
+                                   self.original_image.shape[1], 
+                                   self.original_image.shape[0], 
+                                   QImage.Format_RGBA8888)
+                else:  # Grayscale
+                    qimage = QImage(self.original_image.data, 
+                                   self.original_image.shape[1], 
+                                   self.original_image.shape[0], 
+                                   QImage.Format_Grayscale8)
                 
-                # Get and display bit values (first 10x10 pixels for demo)
-                height, width = self.original_image.shape[:2]
-                sample_size = min(10, height, width)
+                pixmap = QPixmap.fromImage(qimage)
+                self.image_label.setPixmap(pixmap.scaled(
+                    self.image_label.size(), 
+                    Qt.KeepAspectRatio, 
+                    Qt.SmoothTransformation))
                 
-                # For RGB images, take first channel; for grayscale use as-is
-                if len(self.original_image.shape) == 3:
-                    sample_data = self.original_image[:sample_size, :sample_size, 0]
-                else:
-                    sample_data = self.original_image[:sample_size, :sample_size]
-                
-                self.bit_values = sample_data
-                self.display_bit_values(sample_data, "Original Bit Values (Sample):")
-                
-                self.process_button.setEnabled(True)
-                self.processed_image = None
-                self.save_button.setEnabled(False)
+                self.btn_process.setEnabled(True)
+                self.console.clear()
+                self.console.append(f"Loaded image: {file_path}")
+                self.console.append(f"Dimensions: {self.original_image.shape}")
                 
             except Exception as e:
-                QMessageBox.critical(self, 'Error', f'Failed to load image: {str(e)}')
-
-    def display_bit_values(self, data, title):
-        """Display bit values in the console"""
-        self.console.append(f"\n{title}\n" + "="*40)
-        
-        # For 2D array (grayscale or single channel)
-        if len(data.shape) == 2:
-            for row in data:
-                row_str = ' '.join([f'{pixel:03d}' for pixel in row])
-                self.console.append(row_str)
-        # For RGB (we're just showing first channel)
-        else:
-            for row in data:
-                channel_str = ' '.join([f'{pixel[0]:03d}' for pixel in row])
-                self.console.append(channel_str)
-
+                self.console.append(f"Error loading image: {str(e)}")
+    
     def process_bits(self):
         if self.original_image is None:
             return
             
         try:
-            # Process the image (left shift 3 bits)
-            if len(self.original_image.shape) == 3:  # RGB
-                self.processed_image = np.left_shift(self.original_image[:, :, :3], 3)
-                sample_data = self.processed_image[:10, :10, 0]  # Sample first channel
-            else:  # Grayscale
-                self.processed_image = np.left_shift(self.original_image, 3)
-                sample_data = self.processed_image[:10, :10]
+            self.console.append("\nProcessing bits...")
+            
+            # Display original bits (first 5x5 pixels as example)
+            sample = self.original_image[:5, :5]
+            self.console.append("\nOriginal pixel values (5x5 sample):")
+            self.console.append(str(sample))
+            
+            # Process bits: shift left 3 and add 4
+            self.processed_image = (self.original_image << 3) + 4
             
             # Clip values to 0-255 range
             self.processed_image = np.clip(self.processed_image, 0, 255).astype(np.uint8)
             
-            # Display shifted values
-            self.shifted_values = sample_data
-            self.display_bit_values(sample_data, "Shifted Bit Values (Sample):")
+            # Display processed bits
+            processed_sample = self.processed_image[:5, :5]
+            self.console.append("\nProcessed pixel values (5x5 sample):")
+            self.console.append(str(processed_sample))
             
-            # Show processed image preview
-            if len(self.processed_image.shape) == 3:
-                img = Image.fromarray(self.processed_image)
-            else:
-                img = Image.fromarray(self.processed_image).convert('L')
-                
-            img.save('temp_processed.png')  # Temporary save for preview
-            self.image_label.setPixmap(QPixmap('temp_processed.png').scaled(600, 400, Qt.KeepAspectRatio))
+            # Display the processed image
+            if len(self.processed_image.shape) == 2:  # Grayscale
+                qimage = QImage(self.processed_image.data, 
+                               self.processed_image.shape[1], 
+                               self.processed_image.shape[0], 
+                               QImage.Format_Grayscale8)
+            else:  # Color
+                qimage = QImage(self.processed_image.data, 
+                               self.processed_image.shape[1], 
+                               self.processed_image.shape[0], 
+                               QImage.Format_RGB888)
             
-            self.save_button.setEnabled(True)
+            pixmap = QPixmap.fromImage(qimage)
+            self.image_label.setPixmap(pixmap.scaled(
+                self.image_label.size(), 
+                Qt.KeepAspectRatio, 
+                Qt.SmoothTransformation))
+            
+            self.btn_save.setEnabled(True)
+            self.console.append("\nProcessing complete!")
             
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Processing failed: {str(e)}')
-
+            self.console.append(f"Error processing image: {str(e)}")
+    
     def save_image(self):
         if self.processed_image is None:
             return
             
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getSaveFileName(
-            self, 'Save Processed Image', '', 
-            'PNG Image (*.png);;JPEG Image (*.jpg);;BMP Image (*.bmp);;TIFF Image (*.tiff)', 
+            self, 'Save Image', '', 
+            'PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;All Files (*)', 
             options=options)
-        
+            
         if file_path:
             try:
-                if len(self.processed_image.shape) == 3:
-                    img = Image.fromarray(self.processed_image)
-                else:
-                    img = Image.fromarray(self.processed_image).convert('L')
+                # Convert numpy array to PIL Image
+                if len(self.processed_image.shape) == 2:  # Grayscale
+                    pil_img = Image.fromarray(self.processed_image, mode='L')
+                else:  # Color
+                    pil_img = Image.fromarray(self.processed_image, mode='RGB')
                 
-                # Determine format from extension
-                if file_path.lower().endswith('.jpg') or file_path.lower().endswith('.jpeg'):
-                    img.save(file_path, 'JPEG', quality=95)
+                # Save with appropriate format based on extension
+                if file_path.lower().endswith('.png'):
+                    pil_img.save(file_path, 'PNG')
+                elif file_path.lower().endswith(('.jpg', '.jpeg')):
+                    pil_img.save(file_path, 'JPEG', quality=95)
                 else:
-                    img.save(file_path)
+                    pil_img.save(file_path)  # Default to PNG
                 
-                QMessageBox.information(self, 'Success', 'Image saved successfully!')
+                self.console.append(f"\nImage saved to: {file_path}")
                 
             except Exception as e:
-                QMessageBox.critical(self, 'Error', f'Failed to save image: {str(e)}')
+                self.console.append(f"Error saving image: {str(e)}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = BitViewerApp()
+    window = BitImageProcessor()
     window.show()
     sys.exit(app.exec_())
