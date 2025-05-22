@@ -73,7 +73,8 @@ class CompressPage(QWidget):
     def choose_image(self):
         options = QFileDialog.Options()
         self.image_path, _ = QFileDialog.getOpenFileName(self, 'Select Image', '', 
-                                                        'Image Files (*.png *.jpg *.jpeg);;All Files (*)', 
+                                                        # 'Image Files (*.png *.jpg *.jpeg);;All Files (*)', 
+                                                        'Image Files ;All Files (*)',
                                                         options=options)
         if self.image_path:
             pixmap = QPixmap(self.image_path)
