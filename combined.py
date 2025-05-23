@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QFileDialog, 
                             QLabel, QVBoxLayout, QWidget, QHBoxLayout, QStackedWidget,
-                            QMessageBox, QRadioButton, QButtonGroup)
+                            QMessageBox, QRadioButton, QGroupBox)
 from PyQt5.QtGui import QPixmap, QFont, QImage
 from PyQt5.QtCore import Qt
 from PIL import Image
@@ -12,6 +12,11 @@ import zlib
 # Define the quantization median values for each group (32 groups with a width of 8)
 median_values = [4, 12, 20, 28, 36, 44, 52, 60, 68, 76, 84, 92, 100, 108, 116, 124,
                  132, 140, 148, 156, 164, 172, 180, 188, 196, 204, 212, 220, 228, 236, 244, 252]
+
+def print_pixel_samples(title, array):
+    """Print sample 5x5 block of pixel values"""
+    print(f"\n{title}:")
+    print(array[:5, :5])
 
 def apply_median_quantization(img_array):
     """Apply median quantization to the image.""" 
@@ -79,7 +84,7 @@ def unpack_5bit_bytes(packed_data, original_shape):
     
     return unpacked[:total_values].reshape(original_shape)
 
-class CompressPage(QWidget):
+class DayToDayCompressPage(QWidget):
     def __init__(self):
         super().__init__()
         self.image_path = None
@@ -90,7 +95,6 @@ class CompressPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
-        # Image selection
         self.label_instruction = QLabel('1. Select an image')
         self.label_instruction.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.label_instruction)
@@ -105,37 +109,17 @@ class CompressPage(QWidget):
         self.label_image.setMinimumSize(400, 300)
         layout.addWidget(self.label_image, alignment=Qt.AlignCenter)
         
-        # Compression options
-        self.label_options = QLabel('2. Choose compression method')
+        self.label_options = QLabel('2. Choose an option')
         self.label_options.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.label_options)
         
-        self.option1 = QRadioButton('Median Quantization')
-        self.option2 = QRadioButton('Quantization + Bit Reduction')
-        self.option1.setChecked(True)
+        self.option1 = QRadioButton('Apply Median Quantization')
+        self.option2 = QRadioButton('Apply Quantization + Bit Reduction')
+        layout.addWidget(self.option1, alignment=Qt.AlignCenter)
+        layout.addWidget(self.option2, alignment=Qt.AlignCenter)
         
-        options_group = QVBoxLayout()
-        options_group.addWidget(self.option1)
-        options_group.addWidget(self.option2)
-        layout.addLayout(options_group)
-        
-        # Save options
-        self.label_save = QLabel('3. Choose output format')
-        self.label_save.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.label_save)
-        
-        self.save_mat = QRadioButton('MAT File (compressed)')
-        self.save_img = QRadioButton('Standard Image (PNG/JPEG)')
-        self.save_mat.setChecked(True)
-        
-        save_group = QVBoxLayout()
-        save_group.addWidget(self.save_mat)
-        save_group.addWidget(self.save_img)
-        layout.addLayout(save_group)
-        
-        # Process button
-        self.btn_process = QPushButton('Process and Save')
-        self.btn_process.clicked.connect(self.process_and_save)
+        self.btn_process = QPushButton('Process and Save Image')
+        self.btn_process.clicked.connect(self.process_and_save_image)
         layout.addWidget(self.btn_process, alignment=Qt.AlignCenter)
         
         self.setLayout(layout)
@@ -150,75 +134,312 @@ class CompressPage(QWidget):
             pixmap = QPixmap(self.image_path)
             self.label_image.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio))
 
-    def process_and_save(self):
+    def process_and_save_image(self):
         if not self.image_path:
             QMessageBox.warning(self, 'Error', 'Please select an image first.')
             return
         
+        option = 1 if self.option1.isChecked() else 2 if self.option2.isChecked() else None
+        if option is None:
+            QMessageBox.warning(self, 'Error', 'Please choose an option.')
+            return
+        
         try:
             img = Image.open(self.image_path)
-            img_array = np.array(img)
+            img_array = np.array(img)  # Get RGB values
             
-            if img_array.ndim == 2:
+            if img_array.ndim == 2:  # If grayscale, convert to RGB
                 img_array = np.stack([img_array] * 3, axis=-1)
             
-            # Process image based on selected method
-            if self.option1.isChecked():
-                r = apply_median_quantization(img_array[:, :, 0])
-                g = apply_median_quantization(img_array[:, :, 1])
-                b = apply_median_quantization(img_array[:, :, 2])
-                processed_img = np.stack([r, g, b], axis=-1)
-            else:
-                r = apply_bit_reduction(apply_median_quantization(img_array[:, :, 0]))
-                g = apply_bit_reduction(apply_median_quantization(img_array[:, :, 1]))
-                b = apply_bit_reduction(apply_median_quantization(img_array[:, :, 2]))
-                processed_img = np.stack([r, g, b], axis=-1)
+            r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
             
-            # Save based on selected format
-            if self.save_mat.isChecked():
-                # Save as MAT file
-                packed_data, original_shape = pack_5bit_array(processed_img)
-                compressed_data = zlib.compress(packed_data.tobytes())
-                
-                save_path, _ = QFileDialog.getSaveFileName(
-                    self, 'Save MAT File', '', 
-                    'MAT Files (*.mat);;All Files (*)')
-                
-                if save_path:
-                    if not save_path.endswith('.mat'):
-                        save_path += '.mat'
-                    
-                    savemat(save_path, {
-                        'compressed_data': np.frombuffer(compressed_data, dtype=np.uint8),
-                        'original_shape': original_shape,
-                        'is_quantized': self.option1.isChecked()
-                    }, do_compression=True)
-                    
-                    QMessageBox.information(self, 'Success', 'MAT file saved successfully!')
-            else:
-                # Save as standard image
-                save_path, _ = QFileDialog.getSaveFileName(
-                    self, 'Save Image', '', 
-                    'PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)')
-                
-                if save_path:
-                    if self.option1.isChecked():
-                        # For quantized images, values are already 8-bit
-                        img_to_save = Image.fromarray(processed_img.astype(np.uint8))
-                    else:
-                        # For 5-bit reduced, convert back to 8-bit
-                        img_to_save = Image.fromarray(revert_bit_reduction(processed_img))
-                    
-                    img_to_save.save(save_path)
-                    QMessageBox.information(self, 'Success', 'Image saved successfully!')
+            if option == 1:
+                r_quant = apply_median_quantization(r)
+                g_quant = apply_median_quantization(g)
+                b_quant = apply_median_quantization(b)
+                processed_img_array = np.stack([r_quant, g_quant, b_quant], axis=-1)
+            elif option == 2:
+                r_quant = apply_median_quantization(r)
+                g_quant = apply_median_quantization(g)
+                b_quant = apply_median_quantization(b)
+                r_reduced = apply_bit_reduction(r_quant)
+                g_reduced = apply_bit_reduction(g_quant)
+                b_reduced = apply_bit_reduction(b_quant)
+                processed_img_array = np.stack([r_reduced, g_reduced, b_reduced], axis=-1)
+            
+            processed_img = Image.fromarray(processed_img_array.astype(np.uint8))
+            
+            save_as, _ = QFileDialog.getSaveFileName(
+                self, 'Save Image', '', 
+                'PNG files (*.png);;JPEG files (*.jpeg);;All Files (*)')
+            if save_as:
+                processed_img.save(save_as)
+                QMessageBox.information(self, 'Success', f'Image saved as {save_as}')
         
         except Exception as e:
             QMessageBox.critical(self, 'Error', f"An error occurred: {e}")
 
-class DecompressPage(QWidget):
+class DayToDayDecompressPage(QWidget):
     def __init__(self):
         super().__init__()
-        self.input_data = None
+        self.image_path = None
+        self.original_image = None
+        self.processed_image = None
+        self.initUI()
+        
+    def initUI(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # Image display area
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(400, 300)
+        layout.addWidget(self.image_label)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        
+        self.btn_load = QPushButton('Load Image')
+        self.btn_load.clicked.connect(self.load_image)
+        
+        self.btn_process = QPushButton('Process Bits')
+        self.btn_process.clicked.connect(self.process_bits)
+        self.btn_process.setEnabled(False)
+        
+        self.btn_save = QPushButton('Save Processed Image')
+        self.btn_save.clicked.connect(self.save_image)
+        self.btn_save.setEnabled(False)
+        
+        btn_layout.addWidget(self.btn_load)
+        btn_layout.addWidget(self.btn_process)
+        btn_layout.addWidget(self.btn_save)
+        
+        layout.addLayout(btn_layout)
+        
+        self.setLayout(layout)
+    
+    def load_image(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 'Select Image', '', 
+            'Image Files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)', 
+            options=options)
+            
+        if file_path:
+            self.image_path = file_path
+            try:
+                # Load with PIL first to handle all formats
+                pil_img = Image.open(file_path)
+                self.original_image = np.array(pil_img)
+                
+                # Convert to QPixmap for display
+                if pil_img.mode == 'RGB':
+                    bytes_per_line = 3 * pil_img.width
+                    qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height, 
+                                   bytes_per_line, QImage.Format_RGB888)
+                elif pil_img.mode == 'RGBA':
+                    bytes_per_line = 4 * pil_img.width
+                    qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height, 
+                                   bytes_per_line, QImage.Format_RGBA8888)
+                else:  # Grayscale
+                    bytes_per_line = pil_img.width
+                    qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height, 
+                                   bytes_per_line, QImage.Format_Grayscale8)
+                
+                pixmap = QPixmap.fromImage(qimage)
+                self.image_label.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.btn_process.setEnabled(True)
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f"Error loading image: {e}")
+    
+    def process_bits(self):
+        if self.original_image is None:
+            return
+            
+        try:
+            # Process bits: shift left 3 and add 4
+            self.processed_image = (self.original_image << 3) + 4
+            
+            # Clip values to 0-255 range
+            self.processed_image = np.clip(self.processed_image, 0, 255).astype(np.uint8)
+            
+            # Display the processed image
+            if len(self.processed_image.shape) == 2:  # Grayscale
+                bytes_per_line = self.processed_image.shape[1]
+                qimage = QImage(self.processed_image.data, self.processed_image.shape[1], 
+                              self.processed_image.shape[0], bytes_per_line, QImage.Format_Grayscale8)
+            else:  # Color
+                bytes_per_line = 3 * self.processed_image.shape[1]
+                qimage = QImage(self.processed_image.data, self.processed_image.shape[1], 
+                              self.processed_image.shape[0], bytes_per_line, QImage.Format_RGB888)
+            
+            pixmap = QPixmap.fromImage(qimage)
+            self.image_label.setPixmap(pixmap.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.btn_save.setEnabled(True)
+            QMessageBox.information(self, 'Success', 'Processing complete!')
+            
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f"Error processing image: {e}")
+    
+    def save_image(self):
+        if self.processed_image is None:
+            return
+            
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, 'Save Image', '', 
+            'PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;All Files (*)', 
+            options=options)
+            
+        if file_path:
+            try:
+                # Convert numpy array to PIL Image
+                if len(self.processed_image.shape) == 2:  # Grayscale
+                    processed_img = Image.fromarray(self.processed_image, mode='L')
+                else:  # Color
+                    processed_img = Image.fromarray(self.processed_image, mode='RGB')
+                
+                # Save with appropriate format based on extension
+                processed_img.save(file_path)
+                QMessageBox.information(self, 'Success', f'Image saved to: {file_path}')
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f"Error saving image: {e}")
+
+class ScientificCompressPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.image_path = None
+        self.original_shape = None
+        self.initUI()
+        
+    def initUI(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # UI Elements
+        self.label_img = QLabel()
+        self.label_img.setAlignment(Qt.AlignCenter)
+        self.label_img.setStyleSheet("border: 2px dashed #aaa;")
+        self.label_img.setMinimumSize(400, 300)
+        layout.addWidget(self.label_img)
+        
+        btn_load = QPushButton('Load Image')
+        btn_load.clicked.connect(self.load_image)
+        layout.addWidget(btn_load)
+        
+        self.label_method = QLabel('Compression Method:')
+        layout.addWidget(self.label_method)
+        
+        self.option_quant = QRadioButton('Median Quantization (32 levels)')
+        self.option_bitred = QRadioButton('5-bit Reduction')
+        self.option_bitred.setChecked(True)
+        layout.addWidget(self.option_quant)
+        layout.addWidget(self.option_bitred)
+        
+        btn_process = QPushButton('Compress and Save')
+        btn_process.clicked.connect(self.compress_and_save)
+        layout.addWidget(btn_process)
+        
+        self.setLayout(layout)
+        
+    def load_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Open Image', '', 
+            'Images (*.png *.jpg *.jpeg);;All Files (*)')
+        
+        if path:
+            self.image_path = path
+            pixmap = QPixmap(path)
+            self.label_img.setPixmap(
+                pixmap.scaled(400, 300, Qt.KeepAspectRatio))
+            
+            # Print original pixel samples
+            img = np.array(Image.open(path))
+            if img.ndim == 2:
+                img = np.stack([img]*3, axis=-1)
+            print("\nOriginal Image Samples (RGB):")
+            print_pixel_samples("Red", img[:,:,0])
+            print_pixel_samples("Green", img[:,:,1])
+            print_pixel_samples("Blue", img[:,:,2])
+
+    def compress_and_save(self):
+        if not self.image_path:
+            QMessageBox.warning(self, 'Error', 'No image loaded!')
+            return
+        
+        try:
+            img = np.array(Image.open(self.image_path))
+            if img.ndim == 2:
+                img = np.stack([img]*3, axis=-1)
+            
+            # Process based on selected option
+            if self.option_quant.isChecked():
+                processed = np.stack([
+                    apply_median_quantization(img[:,:,0]),
+                    apply_median_quantization(img[:,:,1]),
+                    apply_median_quantization(img[:,:,2])
+                ], axis=-1)
+                print("\nAfter Median Quantization:")
+            else:
+                processed = np.stack([
+                    apply_bit_reduction(img[:,:,0]),
+                    apply_bit_reduction(img[:,:,1]),
+                    apply_bit_reduction(img[:,:,2])
+                ], axis=-1)
+                print("\nAfter 5-bit Reduction:")
+            
+            # Print processed samples
+            print_pixel_samples("Red", processed[:,:,0])
+            print_pixel_samples("Green", processed[:,:,1])
+            print_pixel_samples("Blue", processed[:,:,2])
+            
+            # Pack 5-bit data efficiently
+            packed, shape = pack_5bit_array(processed)
+            compressed = zlib.compress(packed.tobytes())
+            
+            # Save options
+            path, _ = QFileDialog.getSaveFileName(
+                self, 'Save Compressed Data', '', 
+                'MAT Files (*.mat);;All Files (*)')
+            
+            if path:
+                if not path.endswith('.mat'):
+                    path += '.mat'
+                
+                savemat(path, {
+                    'compressed_data': np.frombuffer(compressed, dtype=np.uint8),
+                    'original_shape': shape,
+                    'is_quantized': self.option_quant.isChecked()
+                }, do_compression=True)
+                
+                # Calculate stats
+                orig_size = img.nbytes
+                comp_size = len(compressed)
+                ratio = orig_size / comp_size
+                
+                print(f"\nCompression Results:")
+                print(f"Original: {orig_size/1024:.1f} KB")
+                print(f"Compressed: {comp_size/1024:.1f} KB")
+                print(f"Ratio: {ratio:.1f}x")
+                
+                QMessageBox.information(
+                    self, 'Success', 
+                    f'Saved 5-bit compressed data\n'
+                    f'Compression ratio: {ratio:.1f}x')
+        
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', str(e))
+            print("Error:", e)
+
+class ScientificDecompressPage(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.mat_data = None
         self.reconstructed_img = None
         self.initUI()
         
@@ -227,120 +448,75 @@ class DecompressPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
-        # Input selection
-        self.label_input = QLabel('1. Select input type')
-        self.label_input.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.label_input)
+        # UI Elements
+        self.label_img = QLabel()
+        self.label_img.setAlignment(Qt.AlignCenter)
+        self.label_img.setStyleSheet("border: 2px dashed #aaa;")
+        self.label_img.setMinimumSize(400, 300)
+        layout.addWidget(self.label_img)
         
-        self.input_mat = QRadioButton('Load MAT File')
-        self.input_img = QRadioButton('Load Standard Image')
-        self.input_mat.setChecked(True)
+        btn_load = QPushButton('Load .mat File')
+        btn_load.clicked.connect(self.load_mat_file)
+        layout.addWidget(btn_load)
         
-        input_group = QVBoxLayout()
-        input_group.addWidget(self.input_mat)
-        input_group.addWidget(self.input_img)
-        layout.addLayout(input_group)
+        btn_decompress = QPushButton('Decompress and Show')
+        btn_decompress.clicked.connect(self.decompress_and_show)
+        layout.addWidget(btn_decompress)
         
-        # Load button
-        self.btn_load = QPushButton('Load File')
-        self.btn_load.clicked.connect(self.load_file)
-        layout.addWidget(self.btn_load, alignment=Qt.AlignCenter)
+        btn_save = QPushButton('Save Reconstructed Image')
+        btn_save.clicked.connect(self.save_reconstructed_image)
+        layout.addWidget(btn_save)
         
-        # Image display
-        self.label_image = QLabel()
-        self.label_image.setObjectName("imageLabel")
-        self.label_image.setAlignment(Qt.AlignCenter)
-        self.label_image.setMinimumSize(400, 300)
-        layout.addWidget(self.label_image, alignment=Qt.AlignCenter)
-        
-        # Process button
-        self.btn_process = QPushButton('Process Image')
-        self.btn_process.clicked.connect(self.process_image)
-        self.btn_process.setEnabled(False)
-        layout.addWidget(self.btn_process, alignment=Qt.AlignCenter)
-        
-        # Save button
-        self.btn_save = QPushButton('Save Image')
-        self.btn_save.clicked.connect(self.save_image)
-        self.btn_save.setEnabled(False)
-        layout.addWidget(self.btn_save, alignment=Qt.AlignCenter)
+        # Info labels
+        self.label_info = QLabel('No file loaded')
+        self.label_info.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.label_info)
         
         self.setLayout(layout)
     
-    def load_file(self):
-        options = QFileDialog.Options()
+    def load_mat_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Open MAT File', '', 
+            'MAT Files (*.mat);;All Files (*)')
         
-        if self.input_mat.isChecked():
-            # Load MAT file
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, 'Load MAT File', '', 
-                'MAT Files (*.mat);;All Files (*)', 
-                options=options)
-            
-            if file_path:
-                try:
-                    self.input_data = loadmat(file_path)
-                    self.btn_process.setEnabled(True)
-                    self.btn_save.setEnabled(False)
-                    QMessageBox.information(self, 'Success', 'MAT file loaded successfully!')
-                except Exception as e:
-                    QMessageBox.critical(self, 'Error', f"Failed to load MAT file: {e}")
-        else:
-            # Load standard image
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, 'Load Image', '', 
-                'Image Files (*.png *.jpg *.jpeg);;All Files (*)', 
-                options=options)
-            
-            if file_path:
-                try:
-                    img = Image.open(file_path)
-                    self.input_data = np.array(img)
-                    
-                    if len(self.input_data.shape) == 2:
-                        self.input_data = np.stack([self.input_data]*3, axis=-1)
-                    
-                    # Display the image
-                    height, width, _ = self.input_data.shape
-                    bytes_per_line = 3 * width
-                    qimg = QImage(
-                        self.input_data.data, 
-                        width, height, bytes_per_line, 
-                        QImage.Format_RGB888
-                    )
-                    self.label_image.setPixmap(QPixmap.fromImage(qimg))
-                    self.btn_process.setEnabled(True)
-                    self.btn_save.setEnabled(False)
-                    
-                    QMessageBox.information(self, 'Success', 'Image loaded successfully!')
-                except Exception as e:
-                    QMessageBox.critical(self, 'Error', f"Failed to load image: {e}")
-    
-    def process_image(self):
-        if self.input_data is None:
-            return
-            
-        try:
-            if self.input_mat.isChecked():
-                # Process MAT file
-                compressed_data = self.input_data['compressed_data'].tobytes()
-                decompressed = zlib.decompress(compressed_data)
-                packed_data = np.frombuffer(decompressed, dtype=np.uint8)
-                original_shape = self.input_data['original_shape'][0]
-                unpacked_data = unpack_5bit_bytes(packed_data, original_shape)
+        if path:
+            try:
+                self.mat_data = loadmat(path)
+                self.label_info.setText(f"Loaded: {path.split('/')[-1]}")
                 
-                if self.input_data['is_quantized'][0][0]:
-                    self.reconstructed_img = unpacked_data.astype(np.uint8)
-                else:
-                    self.reconstructed_img = revert_bit_reduction(unpacked_data)
-            else:
-                # Process standard image
-                if np.max(self.input_data) <= 31:  # Likely 5-bit image
-                    self.reconstructed_img = revert_bit_reduction(self.input_data)
-                else:
-                    self.reconstructed_img = self.input_data
+                # Print basic info
+                print("\nLoaded MAT File Info:")
+                print(f"Original shape: {self.mat_data['original_shape']}")
+                print(f"Compression method: {'Quantized' if self.mat_data['is_quantized'] else '5-bit Reduced'}")
+                print(f"Compressed size: {len(self.mat_data['compressed_data'])/1024:.1f} KB")
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f"Failed to load MAT file:\n{str(e)}")
+    
+    def decompress_and_show(self):
+        if self.mat_data is None:
+            QMessageBox.warning(self, 'Error', 'No MAT file loaded!')
+            return
+        
+        try:
+            # Decompress the data
+            compressed_data = self.mat_data['compressed_data'].tobytes()
+            decompressed = zlib.decompress(compressed_data)
             
-            # Display the processed image
+            # Unpack the 5-bit data
+            packed_data = np.frombuffer(decompressed, dtype=np.uint8)
+            reconstructed = unpack_5bit_bytes(packed_data, 
+                                           self.mat_data['original_shape'][0])
+            
+            # Convert back to 8-bit based on compression method
+            if self.mat_data['is_quantized']:
+                # For quantized images, values are already the median values
+                self.reconstructed_img = reconstructed.astype(np.uint8)
+            else:
+                # For 5-bit reduced, shift back to 8-bit range
+                self.reconstructed_img = np.left_shift(reconstructed, 3) + 4
+            
+            # Convert to QImage and display
             height, width, _ = self.reconstructed_img.shape
             bytes_per_line = 3 * width
             qimg = QImage(
@@ -348,30 +524,32 @@ class DecompressPage(QWidget):
                 width, height, bytes_per_line, 
                 QImage.Format_RGB888
             )
-            self.label_image.setPixmap(QPixmap.fromImage(qimg))
-            self.btn_save.setEnabled(True)
+            self.label_img.setPixmap(QPixmap.fromImage(qimg))
             
-            QMessageBox.information(self, 'Success', 'Image processed successfully!')
-        
+            # Print reconstruction info
+            print("\nReconstruction Info:")
+            print(f"Image shape: {self.reconstructed_img.shape}")
+            print("Sample pixel values (top-left 5x5):")
+            print(self.reconstructed_img[:5, :5, :])
+            
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f"Processing failed: {e}")
+            QMessageBox.critical(self, 'Error', f"Decompression failed:\n{str(e)}")
     
-    def save_image(self):
+    def save_reconstructed_image(self):
         if self.reconstructed_img is None:
+            QMessageBox.warning(self, 'Error', 'No image to save!')
             return
-            
-        options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, 'Save Image', '', 
-            'PNG Files (*.png);;JPEG Files (*.jpg);;All Files (*)', 
-            options=options)
         
-        if file_path:
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Save Image', '', 
+            'PNG Images (*.png);;JPEG Images (*.jpg);;All Files (*)')
+        
+        if path:
             try:
-                Image.fromarray(self.reconstructed_img).save(file_path)
-                QMessageBox.information(self, 'Success', f'Image saved to {file_path}')
+                Image.fromarray(self.reconstructed_img).save(path)
+                QMessageBox.information(self, 'Success', f"Image saved to:\n{path}")
             except Exception as e:
-                QMessageBox.critical(self, 'Error', f"Failed to save image: {e}")
+                QMessageBox.critical(self, 'Error', f"Failed to save image:\n{str(e)}")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -400,31 +578,53 @@ class MainWindow(QMainWindow):
         logo.setStyleSheet("color: #3498db;")
         sidebar_layout.addWidget(logo)
         
-        # Sidebar buttons
-        self.compress_btn = QPushButton('Compress')
-        self.compress_btn.setCheckable(True)
-        self.compress_btn.setChecked(True)
+        # Day-to-Day Use Section
+        day_group = QGroupBox("Day-to-Day Use")
+        day_layout = QVBoxLayout()
         
-        self.decompress_btn = QPushButton('Decompress')
-        self.decompress_btn.setCheckable(True)
+        self.day_compress_btn = QPushButton('Compress')
+        self.day_compress_btn.setCheckable(True)
+        self.day_compress_btn.setChecked(True)
         
-        button_group = QVBoxLayout()
-        button_group.addWidget(self.compress_btn)
-        button_group.addWidget(self.decompress_btn)
-        button_group.addStretch()
+        self.day_decompress_btn = QPushButton('Decompress')
+        self.day_decompress_btn.setCheckable(True)
         
-        sidebar_layout.addLayout(button_group)
+        day_layout.addWidget(self.day_compress_btn)
+        day_layout.addWidget(self.day_decompress_btn)
+        day_group.setLayout(day_layout)
+        sidebar_layout.addWidget(day_group)
+        
+        # Scientific Use Section
+        sci_group = QGroupBox("Scientific Use")
+        sci_layout = QVBoxLayout()
+        
+        self.sci_compress_btn = QPushButton('Compress')
+        self.sci_compress_btn.setCheckable(True)
+        
+        self.sci_decompress_btn = QPushButton('Decompress')
+        self.sci_decompress_btn.setCheckable(True)
+        
+        sci_layout.addWidget(self.sci_compress_btn)
+        sci_layout.addWidget(self.sci_decompress_btn)
+        sci_group.setLayout(sci_layout)
+        sidebar_layout.addWidget(sci_group)
+        
+        sidebar_layout.addStretch()
         sidebar.setLayout(sidebar_layout)
         
         # Content area
         self.content = QStackedWidget()
         
         # Add pages
-        self.compress_page = CompressPage()
-        self.decompress_page = DecompressPage()
+        self.day_compress_page = DayToDayCompressPage()
+        self.day_decompress_page = DayToDayDecompressPage()
+        self.sci_compress_page = ScientificCompressPage()
+        self.sci_decompress_page = ScientificDecompressPage()
         
-        self.content.addWidget(self.compress_page)
-        self.content.addWidget(self.decompress_page)
+        self.content.addWidget(self.day_compress_page)  # Index 0
+        self.content.addWidget(self.day_decompress_page)  # Index 1
+        self.content.addWidget(self.sci_compress_page)  # Index 2
+        self.content.addWidget(self.sci_decompress_page)  # Index 3
         
         # Add to main layout
         main_layout.addWidget(sidebar)
@@ -433,21 +633,22 @@ class MainWindow(QMainWindow):
         main_widget.setLayout(main_layout)
         
         # Connect signals
-        self.compress_btn.clicked.connect(self.show_compress)
-        self.decompress_btn.clicked.connect(self.show_decompress)
+        self.day_compress_btn.clicked.connect(lambda: self.show_page(0))
+        self.day_decompress_btn.clicked.connect(lambda: self.show_page(1))
+        self.sci_compress_btn.clicked.connect(lambda: self.show_page(2))
+        self.sci_decompress_btn.clicked.connect(lambda: self.show_page(3))
         
         # Apply styles
         self.apply_styles()
     
-    def show_compress(self):
-        self.content.setCurrentIndex(0)
-        self.compress_btn.setChecked(True)
-        self.decompress_btn.setChecked(False)
-    
-    def show_decompress(self):
-        self.content.setCurrentIndex(1)
-        self.decompress_btn.setChecked(True)
-        self.compress_btn.setChecked(False)
+    def show_page(self, index):
+        self.content.setCurrentIndex(index)
+        
+        # Update button states
+        self.day_compress_btn.setChecked(index == 0)
+        self.day_decompress_btn.setChecked(index == 1)
+        self.sci_compress_btn.setChecked(index == 2)
+        self.sci_decompress_btn.setChecked(index == 3)
     
     def apply_styles(self):
         self.setStyleSheet("""
@@ -491,6 +692,19 @@ class MainWindow(QMainWindow):
             }
             QMessageBox QLabel {
                 color: #ccd6f6;
+            }
+            QGroupBox {
+                border: 1px solid #1e3a8a;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+                color: #ccd6f6;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px;
             }
         """)
 

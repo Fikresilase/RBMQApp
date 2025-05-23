@@ -10,7 +10,7 @@ from PIL import Image
 # Define the quantization median values for each group (32 groups with a width of 8)
 median_values = [4, 12, 20, 28, 36, 44, 52, 60, 68, 76, 84, 92, 100, 108, 116, 124,
                  132, 140, 148, 156, 164, 172, 180, 188, 196, 204, 212, 220, 228, 236, 244, 252]
-
+# median_values = np.arange(4,252,8)
 def apply_median_quantization(img_array):
     """Apply median quantization to the image.""" 
     quantized_array = np.zeros_like(img_array)
