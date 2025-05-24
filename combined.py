@@ -582,7 +582,7 @@ class WelcomeScreen(QWidget):
         
         # Names
         names = [
-            "1. Fikresilase Wondmeneh",
+            "1. Fikresilase Wondmeneh ",
             "2. Eyuel Mulugeta              ",
             "3. Eyerusalem Desalegn    ",
             "4. Haymanot Sileshi            ",
@@ -597,6 +597,19 @@ class WelcomeScreen(QWidget):
             name_label.setStyleSheet("color: #ccd6f6;")
             name_label.setAlignment(Qt.AlignCenter)
             names_layout.addWidget(name_label)
+        # Advisor label
+        advisor_label = QLabel("Advised by: MR. Girma")
+        advisor_label.setFont(QFont('Arial', 11, QFont.Bold))
+        advisor_label.setStyleSheet("color: #ccd6f6; margin-top: 15px;")
+
+# Wrap the advisor label in a layout to align it properly to the right
+        advisor_layout = QHBoxLayout()
+        advisor_layout.addStretch()  # Pushes the label to the right
+        advisor_layout.addWidget(advisor_label)
+
+        names_layout.addLayout(advisor_layout)
+
+    
         
         # Continue button
         continue_btn = QPushButton('Continue to the App')
