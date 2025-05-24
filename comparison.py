@@ -35,41 +35,51 @@ class ImageComparisonTool(QMainWindow):
     def initUI(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        
-        main_layout = QVBoxLayout()
-        main_widget.setLayout(main_layout)
-        
-        # Header
-        header = QLabel("Image Quality Analysis Dashboard")
-        header.setStyleSheet("""
-            font-size: 24px; 
-            font-weight: bold; 
-            color: #2c3e50;
-            padding: 10px;
-        """)
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Header Label
+        header = QLabel("Advanced Image Quality Analyzer")
         header.setAlignment(Qt.AlignCenter)
+        header.setStyleSheet("""
+            font-size: 28px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        """)
         main_layout.addWidget(header)
-        
-        # Control panel
+
+        # Control Panel
         control_layout = QHBoxLayout()
-        
-        self.load_btn = QPushButton("Select Image Folder")
+        control_layout.setSpacing(15)
+
+        self.load_btn = QPushButton("📁 Select Image Folder")
         self.load_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3498db; 
                 color: white; 
                 border: none; 
-                padding: 10px 20px; 
+                padding: 12px 20px; 
                 font-size: 14px; 
-                border-radius: 4px;
+                border-radius: 6px;
+                min-width: 180px;
+                font-weight: 500;
             }
             QPushButton:hover { 
                 background-color: #2980b9; 
             }
+            QPushButton:pressed {
+                background-color: #1c5980;
+            }
         """)
         self.load_btn.clicked.connect(self.load_folder)
         control_layout.addWidget(self.load_btn)
-        
+
         self.metric_combo = QComboBox()
         self.metric_combo.addItems([
             "Single Metric View", 
@@ -78,93 +88,154 @@ class ImageComparisonTool(QMainWindow):
         self.metric_combo.setCurrentText("Multi-Parameter Comparison")
         self.metric_combo.currentTextChanged.connect(self.update_graph)
         self.metric_combo.setStyleSheet("""
-            QComboBox { 
-                padding: 8px; 
-                font-size: 14px; 
-                border-radius: 4px; 
-                border: 1px solid #bdc3c7; 
-                min-width: 200px;
+            QComboBox {
+                padding: 10px 12px;
+                font-size: 14px;
+                border-radius: 6px;
+                border: 1px solid #ccc;
+                background-color: #ffffff;
+                min-width: 220px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox:focus {
+                border: 1px solid #3498db;
+                outline: none;
             }
         """)
         control_layout.addWidget(QLabel("Display Mode:"))
         control_layout.addWidget(self.metric_combo)
-        
         control_layout.addStretch()
+
         main_layout.addLayout(control_layout)
-        
-        # Reference image info
+
+        # Reference Info Label
         self.reference_info = QLabel("No reference image loaded")
-        self.reference_info.setStyleSheet("font-style: italic; color: #7f8c8d;")
         self.reference_info.setAlignment(Qt.AlignCenter)
+        self.reference_info.setStyleSheet("""
+            font-size: 14px;
+            font-style: italic;
+            color: #7f8c8d;
+            padding: 10px;
+            background-color: #ecf0f1;
+            border-radius: 6px;
+        """)
         main_layout.addWidget(self.reference_info)
-        
-        # Results area (tabs)
+
+        # Tabs Area
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
-            QTabBar::tab { 
-                padding: 8px 12px; 
-                font-size: 14px; 
+            QTabBar::tab {
+                padding: 12px 20px;
+                font-size: 15px;
+                font-weight: 500;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 4px;
+                background-color: #ecf0f1;
+                color: #2c3e50;
             }
-            QTabWidget::pane { 
-                border: 1px solid #bdc3c7; 
+            QTabBar::tab:selected {
+                background-color: #3498db;
+                color: white;
+            }
+            QTabWidget::pane {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                background-color: #ffffff;
             }
         """)
         main_layout.addWidget(self.tabs)
-        
-        # Table tab
+
+        # Table Tab
         self.table_tab = QWidget()
-        self.table_layout = QVBoxLayout()
-        self.table_tab.setLayout(self.table_layout)
-        
+        self.table_layout = QVBoxLayout(self.table_tab)
+        self.table_layout.setContentsMargins(10, 10, 10, 10)
+
         self.results_table = QTableWidget()
         self.results_table.setStyleSheet("""
-            QTableWidget { 
-                font-size: 12px; 
-                selection-background-color: #d6eaf8;
+            QTableWidget {
+                font-size: 13px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                background-color: #ffffff;
             }
-            QHeaderView::section { 
-                background-color: #ecf0f1; 
-                padding: 6px; 
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background-color: #d6eaf8;
+            }
+            QHeaderView::section {
+                background-color: #f1f3f5;
+                padding: 8px 10px;
                 font-weight: bold;
+                color: #2c3e50;
+                border-bottom: 1px solid #ccc;
             }
         """)
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.results_table.verticalHeader().setVisible(False)
         self.results_table.setSortingEnabled(True)
         self.table_layout.addWidget(self.results_table)
-        
-        # Graph tab
+
+        # Graph Tab
         self.graph_tab = QWidget()
-        self.graph_layout = QVBoxLayout()
-        self.graph_tab.setLayout(self.graph_layout)
-        
+        self.graph_layout = QVBoxLayout(self.graph_tab)
+        self.graph_layout.setContentsMargins(10, 10, 10, 10)
+
         self.graph_widget = pg.PlotWidget()
         self.graph_widget.setBackground('w')
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.graph_widget.setTitle("<span style='font-size: 16pt; color: #2c3e50;'>Image Quality Metrics</span>")
         self.graph_layout.addWidget(self.graph_widget)
-        
-        # Thumbnail tab
+
+        # Thumbnail Tab
         self.thumbnail_tab = QWidget()
-        self.thumbnail_layout = QVBoxLayout()
-        self.thumbnail_tab.setLayout(self.thumbnail_layout)
-        
+        self.thumbnail_layout = QVBoxLayout(self.thumbnail_tab)
+        self.thumbnail_layout.setContentsMargins(10, 10, 10, 10)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: #f8f9fa;
+            }
+            QScrollBar:vertical {
+                width: 12px;
+                background-color: #f1f3f5;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #d0d6de;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background-color: transparent;
+            }
+        """)
+
         scroll_content = QWidget()
         self.thumbnail_scroll_layout = QVBoxLayout(scroll_content)
-        
         self.thumbnail_container = QWidget()
-        self.thumbnail_container_layout = QVBoxLayout()
+        self.thumbnail_container_layout = QVBoxLayout(self.thumbnail_container)
         self.thumbnail_container.setLayout(self.thumbnail_container_layout)
-        
         self.thumbnail_scroll_layout.addWidget(self.thumbnail_container)
         self.thumbnail_scroll_layout.addStretch()
+
         scroll.setWidget(scroll_content)
         self.thumbnail_layout.addWidget(scroll)
+
+        # Add Tabs
+        self.tabs.addTab(self.table_tab, "📊 Metrics Table")
+        self.tabs.addTab(self.graph_tab, "📈 Visual Comparison")
+        self.tabs.addTab(self.thumbnail_tab, "🖼️ Image Gallery")
         
-        self.tabs.addTab(self.table_tab, "Metrics Table")
-        self.tabs.addTab(self.graph_tab, "Visual Comparison")
-        self.tabs.addTab(self.thumbnail_tab, "Image Gallery")
     
     def setupGraphStyles(self):
         self.metric_colors = {
