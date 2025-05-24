@@ -551,6 +551,84 @@ class ScientificDecompressPage(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f"Failed to save image:\n{str(e)}")
 
+
+class WelcomeScreen(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.initUI()
+        
+    def initUI(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(30)
+        
+        # Title
+        title = QLabel('Welcome to RBMQ')
+        title.setFont(QFont('Arial', 28, QFont.Bold))
+        title.setStyleSheet("color: #3b82f6;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        # Subtitle
+        subtitle = QLabel('For Efficient Image Compression')
+        subtitle.setFont(QFont('Arial', 16))
+        subtitle.setStyleSheet("color: #ccd6f6;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        
+        # Team section
+        team_label = QLabel('Research and Development by\nAASTU Electrical and Computer Engineering 5th Year Students')
+        team_label.setFont(QFont('Arial', 12, QFont.Bold))
+        team_label.setStyleSheet("color: #ccd6f6; margin-top: 30px;")
+        team_label.setAlignment(Qt.AlignCenter)
+        
+        # Names
+        names = [
+            "1. Fikresilase Wondmeneh",
+            "2. Eyuel Mulugeta              ",
+            "3. Eyerusalem Desalegn    ",
+            "4. Haymanot Sileshi            ",
+            "5. Feven Yohanis               "
+        ]
+        
+        names_layout = QVBoxLayout()
+        names_layout.setSpacing(8)
+        for name in names:
+            name_label = QLabel(name)
+            name_label.setFont(QFont('Arial', 12))
+            name_label.setStyleSheet("color: #ccd6f6;")
+            name_label.setAlignment(Qt.AlignCenter)
+            names_layout.addWidget(name_label)
+        
+        # Continue button
+        continue_btn = QPushButton('Continue to the App')
+        continue_btn.setFont(QFont('Arial', 14))
+        continue_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border-radius: 5px;
+                padding: 12px 24px;
+                min-width: 200px;
+            }
+            QPushButton:hover {
+                background-color: #2563eb;
+            }
+        """)
+        continue_btn.setCursor(Qt.PointingHandCursor)
+        
+        # Add widgets to layout
+        layout.addStretch(1)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addStretch(1)
+        layout.addWidget(team_label)
+        layout.addLayout(names_layout)
+        layout.addStretch(2)
+        layout.addWidget(continue_btn, alignment=Qt.AlignCenter)
+        layout.addStretch(1)
+        
+        self.setLayout(layout)
+        self.setStyleSheet("background-color: #0a192f;")
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -561,6 +639,36 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Stacked widget for welcome screen and main app
+        self.stacked_widget = QStackedWidget()
+        
+        # Create welcome screen
+        self.welcome_screen = WelcomeScreen()
+        self.welcome_screen.findChild(QPushButton).clicked.connect(self.show_main_app)
+        
+        # Create main app content
+        self.main_app_widget = QWidget()
+        self.setup_main_app()
+        
+        # Add to stacked widget
+        self.stacked_widget.addWidget(self.welcome_screen)  # Index 0
+        self.stacked_widget.addWidget(self.main_app_widget)  # Index 1
+        
+        # Set welcome screen as initial view
+        self.stacked_widget.setCurrentIndex(0)
+        
+        main_layout.addWidget(self.stacked_widget)
+        main_widget.setLayout(main_layout)
+        
+        # Apply styles
+        self.apply_styles()
+    
+    def setup_main_app(self):
+        """Setup the original main application interface"""
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -630,16 +738,17 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.content)
         
-        main_widget.setLayout(main_layout)
+        self.main_app_widget.setLayout(main_layout)
         
         # Connect signals
         self.day_compress_btn.clicked.connect(lambda: self.show_page(0))
         self.day_decompress_btn.clicked.connect(lambda: self.show_page(1))
         self.sci_compress_btn.clicked.connect(lambda: self.show_page(2))
         self.sci_decompress_btn.clicked.connect(lambda: self.show_page(3))
-        
-        # Apply styles
-        self.apply_styles()
+    
+    def show_main_app(self):
+        """Switch from welcome screen to main application"""
+        self.stacked_widget.setCurrentIndex(1)
     
     def show_page(self, index):
         self.content.setCurrentIndex(index)
