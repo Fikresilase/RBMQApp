@@ -3,6 +3,7 @@ import os
 import numpy as np
 from PIL import Image
 import pandas as pd
+from scipy.io import loadmat
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import mean_squared_error as mse
@@ -187,12 +188,6 @@ class ImageComparisonTool(QMainWindow):
             'PSNR': 'dB',
             'MSE': 'Error'
         }
-        
-        # Configure graph appearance
-        self.graph_widget.setLabel('left', 'Metric Value')
-        self.graph_widget.setLabel('bottom', 'Images')
-        self.graph_widget.getPlotItem().getAxis('bottom').setHeight(150)
-        self.graph_widget.getPlotItem().getAxis('left').setWidth(80)
     
     def load_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Image Folder")
@@ -203,102 +198,135 @@ class ImageComparisonTool(QMainWindow):
         self.image_data = []
         self.bmp_reference = None
         
-        # Find the first image to use as reference (prefer BMP if available)
-        image_files = [f for f in os.listdir(folder_path) 
-                      if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
+        # Find all supported files
+        supported_files = [f for f in os.listdir(folder_path) 
+                         if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.mat'))]
         
-        if not image_files:
-            self.reference_info.setText("⚠️ No images found in folder")
+        if not supported_files:
+            self.reference_info.setText("⚠️ No supported files found in folder")
             return
         
-        # Try to find a BMP first, otherwise use the first image
-        for f in image_files:
-            if f.lower().endswith('.bmp'):
-                self.bmp_reference = os.path.join(folder_path, f)
-                break
-        else:
-            self.bmp_reference = os.path.join(folder_path, image_files[0])
-        
-        # Load reference image
-        try:
-            with Image.open(self.bmp_reference) as ref_img:
-                ref_array = np.array(ref_img.convert('RGB'))
-                
-                # Store reference dimensions for comparison
-                ref_width, ref_height = ref_img.size
-                
-                self.reference_info.setText(
-                    f"Reference: {os.path.basename(self.bmp_reference)} | "
-                    f"Size: {ref_width}×{ref_height} | "
-                    f"File Size: {os.path.getsize(self.bmp_reference)/1024:.1f} KB"
-                )
-                
-                # Process all other images in folder
-                for filename in image_files:
-                    if filename == os.path.basename(self.bmp_reference):
+        # Process each file
+        for filename in supported_files:
+            filepath = os.path.join(folder_path, filename)
+            try:
+                if filename.lower().endswith('.mat'):
+                    # Handle .mat file
+                    mat_data = loadmat(filepath)
+                    img_array = None
+                    
+                    # Try common image variable names
+                    for var_name in ['image', 'img', 'data', 'X']:
+                        if var_name in mat_data:
+                            img_array = mat_data[var_name]
+                            break
+                    
+                    # If not found, look for first suitable array
+                    if img_array is None:
+                        for key, value in mat_data.items():
+                            if isinstance(value, np.ndarray) and len(value.shape) >= 2:
+                                img_array = value
+                                break
+                    
+                    if img_array is None:
                         continue
                         
-                    filepath = os.path.join(folder_path, filename)
-                    try:
-                        with Image.open(filepath) as img:
-                            img_array = np.array(img.convert('RGB'))
-                            img_width, img_height = img.size
-                            
-                            # Calculate metrics without resizing
-                            if ref_array.shape[:2] != img_array.shape[:2]:
-                                # Note the size difference but still calculate metrics
-                                size_note = f" (Size diff: {ref_width}x{ref_height} vs {img_width}x{img_height})"
-                            else:
-                                size_note = ""
-                            
-                            # Convert to LAB color space for Delta E
-                            ref_lab = color.rgb2lab(ref_array / 255.0)
-                            img_lab = color.rgb2lab(img_array / 255.0)
-                            
-                            # Calculate metrics that don't require same dimensions
-                            delta_e = color.deltaE_ciede2000(ref_lab, img_lab)
-                            entropy = shannon_entropy(img_array)
-                            file_size = os.path.getsize(filepath) / 1024
-                            bpp = (os.path.getsize(filepath) * 8) / (img_width * img_height)
-                            
-                            # Calculate metrics that require same dimensions (with padding if needed)
-                            if ref_array.shape == img_array.shape:
-                                ssim_value = ssim(ref_array, img_array, channel_axis=2, 
-                                                 data_range=img_array.max() - img_array.min())
-                                psnr_value = psnr(ref_array, img_array, 
-                                                 data_range=img_array.max() - img_array.min())
-                                mse_value = mse(ref_array, img_array)
-                            else:
-                                # Handle size mismatch by padding or other strategy
-                                ssim_value = -1  # Indicate invalid comparison
-                                psnr_value = -1
-                                mse_value = -1
-                            
-                            self.image_data.append({
-                                'Filename': filename + size_note,
-                                'Original Filename': filename,
-                                'File Size (KB)': file_size,
-                                'Compression Ratio': os.path.getsize(self.bmp_reference) / os.path.getsize(filepath),
-                                'Delta E (CIEDE2000)': np.mean(delta_e),
-                                'Entropy': entropy,
-                                'Bit Per Pixel': bpp,
-                                'SSIM': ssim_value if ssim_value != -1 else float('nan'),
-                                'PSNR': psnr_value if psnr_value != -1 else float('nan'),
-                                'MSE': mse_value if mse_value != -1 else float('nan'),
-                                'Width': img_width,
-                                'Height': img_height
-                            })
-                            
-                    except Exception as e:
-                        print(f"Error processing {filename}: {str(e)}")
+                    # Convert to uint8 if needed
+                    if img_array.dtype != np.uint8:
+                        img_array = (255 * (img_array - img_array.min()) / 
+                                   (img_array.max() - img_array.min())).astype(np.uint8)
+                    
+                    # Convert to 3 channels if grayscale
+                    if len(img_array.shape) == 2:
+                        img_array = np.stack([img_array]*3, axis=-1)
+                    elif img_array.shape[2] == 1:
+                        img_array = np.concatenate([img_array]*3, axis=-1)
+                    
+                    img = Image.fromarray(img_array)
+                    file_size = os.path.getsize(filepath) / 1024
+                    is_reference = False
+                    
+                else:
+                    # Handle regular image files
+                    img = Image.open(filepath)
+                    img_array = np.array(img.convert('RGB'))
+                    file_size = os.path.getsize(filepath) / 1024
+                    is_reference = filename.lower().endswith('.bmp')
                 
-                # Update UI
-                self.display_results_table()
-                self.update_graph()
-                self.display_thumbnails(folder_path)
-            
-        except Exception as e:
-            self.reference_info.setText(f"⚠️ Error loading reference image: {str(e)}")
+                # Set as reference if it's the first BMP found
+                if is_reference and self.bmp_reference is None:
+                    self.bmp_reference = {
+                        'path': filepath,
+                        'array': img_array,
+                        'image': img,
+                        'size': file_size,
+                        'width': img.width,
+                        'height': img.height,
+                        'entropy': shannon_entropy(img_array)
+                    }
+                    continue
+                
+                # Calculate metrics
+                metrics = {
+                    'Filename': filename,
+                    'File Size (KB)': file_size,
+                    'Width': img.width,
+                    'Height': img.height,
+                    'Entropy': shannon_entropy(img_array)
+                }
+                
+                if self.bmp_reference:
+                    # Calculate comparison metrics
+                    ref_array = self.bmp_reference['array']
+                    
+                    # Resize if dimensions don't match
+                    if img_array.shape != ref_array.shape:
+                        img = img.resize((self.bmp_reference['width'], self.bmp_reference['height']))
+                        img_array = np.array(img.convert('RGB'))
+                    
+                    metrics.update({
+                        'Compression Ratio': self.bmp_reference['size'] / file_size,
+                        'Delta E (CIEDE2000)': np.mean(color.deltaE_ciede2000(
+                            color.rgb2lab(ref_array/255.0),
+                            color.rgb2lab(img_array/255.0)
+                        )),
+                        'SSIM': ssim(ref_array, img_array, channel_axis=2,
+                                    data_range=img_array.max()-img_array.min()),
+                        'PSNR': psnr(ref_array, img_array,
+                                    data_range=img_array.max()-img_array.min()),
+                        'MSE': mse(ref_array, img_array)
+                    })
+                
+                self.image_data.append(metrics)
+                
+            except Exception as e:
+                print(f"Error processing {filename}: {str(e)}")
+        
+        # Add reference BMP to comparison data if it exists
+        if self.bmp_reference:
+            self.image_data.insert(0, {
+                'Filename': os.path.basename(self.bmp_reference['path']) + " (REFERENCE)",
+                'File Size (KB)': self.bmp_reference['size'],
+                'Width': self.bmp_reference['width'],
+                'Height': self.bmp_reference['height'],
+                'Entropy': self.bmp_reference['entropy'],
+                'Compression Ratio': 1.0,
+                'Delta E (CIEDE2000)': 0.0,
+                'SSIM': 1.0,
+                'PSNR': float('inf'),
+                'MSE': 0.0
+            })
+        
+            self.reference_info.setText(
+                f"Reference: {os.path.basename(self.bmp_reference['path'])} | "
+                f"Size: {self.bmp_reference['width']}×{self.bmp_reference['height']} | "
+                f"File Size: {self.bmp_reference['size']:.1f} KB"
+            )
+        
+        # Update UI
+        self.display_results_table()
+        self.update_graph()
+        self.display_thumbnails(folder_path)
     
     def display_results_table(self):
         if not self.image_data:
@@ -410,7 +438,7 @@ class ImageComparisonTool(QMainWindow):
             x=x, 
             height=values, 
             width=0.6, 
-            brush=self.metric_colors[metric],
+            brush=self.metric_colors.get(metric, '#777777'),
             pen=pg.mkPen(color='#2c3e50', width=1),
             name=metric
         )
@@ -446,16 +474,19 @@ class ImageComparisonTool(QMainWindow):
         if not self.image_data:
             return
         
-        # Select metrics to display
+        # Include the requested metrics plus some key ones
         metrics_to_show = [
+            'File Size (KB)',
+            'Entropy',
+            'MSE',
             'Compression Ratio',
             'PSNR',
-            'SSIM',
             'Delta E (CIEDE2000)',
+            'SSIM',
             'Bit Per Pixel'
         ]
         
-        filenames = [img['Original Filename'] for img in self.image_data]
+        filenames = [img['Filename'] for img in self.image_data]
         num_images = len(filenames)
         num_metrics = len(metrics_to_show)
         
@@ -466,15 +497,13 @@ class ImageComparisonTool(QMainWindow):
         # Add bars for each metric
         bars = []
         for i, metric in enumerate(metrics_to_show):
-            values = [img.get(metric, 0) for img in self.image_data]
-            
-            # Handle special cases
-            if metric == 'PSNR':
-                valid_values = [v for v in values if v != float('inf') and not np.isnan(v)]
-                max_val = max(valid_values) if valid_values else 100
-                values = [v if v != float('inf') and not np.isnan(v) else max_val * 1.2 for v in values]
-            elif metric in ['SSIM', 'Delta E (CIEDE2000)']:
-                values = [v if not np.isnan(v) else 0 for v in values]
+            values = []
+            for img in self.image_data:
+                val = img.get(metric, 0)
+                # Handle special cases
+                if metric == 'PSNR' and (val == float('inf') or np.isnan(val)):
+                    val = 0  # Will be labeled as N/A
+                values.append(val)
             
             # Position bars side by side
             x_pos = x + i * width
@@ -483,7 +512,7 @@ class ImageComparisonTool(QMainWindow):
                 x=x_pos,
                 height=values,
                 width=width,
-                brush=self.metric_colors[metric],
+                brush=self.metric_colors.get(metric, '#777777'),
                 pen=pg.mkPen(color='#2c3e50', width=0.5),
                 name=metric
             )
@@ -494,18 +523,29 @@ class ImageComparisonTool(QMainWindow):
             for j, (xj, val) in enumerate(zip(x_pos, values)):
                 if not np.isnan(val) and val != float('inf'):
                     text = pg.TextItem(
-                        text=f"{val:.2f}",
+                        text=f"{val:.2f}" if isinstance(val, float) else str(val),
                         color=(0, 0, 0),
                         anchor=(0.5, 1),
-                        angle=90
+                        angle=90,
+                        fill=pg.mkColor(255, 255, 255, 200)
                     )
                     text.setPos(xj, val)
+                    self.graph_widget.addItem(text)
+                elif metric == 'PSNR' and val == float('inf'):
+                    text = pg.TextItem(
+                        text="∞",
+                        color=(0, 0, 0),
+                        anchor=(0.5, 1),
+                        angle=90,
+                        fill=pg.mkColor(255, 255, 255, 200)
+                    )
+                    text.setPos(xj, max([v for v in values if v != float('inf')], default=100)*1.1)
                     self.graph_widget.addItem(text)
         
         # Customize plot
         self.graph_widget.setLabel('left', 'Metric Values')
         self.graph_widget.setLabel('bottom', 'Images')
-        self.graph_widget.setTitle('Multi-Parameter Image Comparison (vs Reference Image)')
+        self.graph_widget.setTitle('Multi-Parameter Comparison (File Size, Entropy, MSE, etc.)')
         
         # Set x-axis ticks (centered under groups)
         ticks = [list(zip(x + width * (num_metrics-1)/2, [f[:10] + "..." if len(f) > 10 else f for f in filenames]))]
@@ -522,22 +562,16 @@ class ImageComparisonTool(QMainWindow):
         for i in reversed(range(self.thumbnail_container_layout.count())): 
             self.thumbnail_container_layout.itemAt(i).widget().setParent(None)
         
-        # First show the reference image
-        self.add_thumbnail(
-            self.bmp_reference, 
-            is_reference=True,
-            reference_size=os.path.getsize(self.bmp_reference)
-        )
-        
-        # Then show all other images
-        for img_data in sorted(self.image_data, key=lambda x: x['Original Filename']):
-            filepath = os.path.join(folder_path, img_data['Original Filename'])
-            self.add_thumbnail(filepath, img_data)
+        # Show all images including reference
+        for img_data in self.image_data:
+            filename = img_data['Original Filename'] if 'Original Filename' in img_data else img_data['Filename'].replace(" (REFERENCE)", "")
+            filepath = os.path.join(folder_path, filename)
+            self.add_thumbnail(filepath, img_data, is_reference="(REFERENCE)" in img_data['Filename'])
         
         # Add stretch to push content up
         self.thumbnail_container_layout.addStretch()
     
-    def add_thumbnail(self, filepath, img_data=None, is_reference=False, reference_size=None):
+    def add_thumbnail(self, filepath, img_data=None, is_reference=False):
         try:
             # Create thumbnail widget
             thumb_widget = QWidget()
@@ -583,13 +617,7 @@ class ImageComparisonTool(QMainWindow):
             info_layout.addWidget(name_label)
             
             # Add dimensions
-            if is_reference:
-                with Image.open(filepath) as img:
-                    width, height = img.size
-                dim_label = QLabel(f"Dimensions: {width}×{height}")
-            elif img_data:
-                dim_label = QLabel(f"Dimensions: {img_data['Width']}×{img_data['Height']}")
-            
+            dim_label = QLabel(f"Dimensions: {img_data['Width']}×{img_data['Height']}")
             dim_label.setStyleSheet("color: #7f8c8d; font-size: 11px;")
             info_layout.addWidget(dim_label)
             
@@ -604,33 +632,30 @@ class ImageComparisonTool(QMainWindow):
                     }
                 """)
                 info_layout.addWidget(ref_label)
+            
+            # Add key metrics with color coding
+            metrics = [
+                ("File Size", f"{img_data['File Size (KB)']:.1f} KB", "#3498db"),
+                ("Entropy", f"{img_data['Entropy']:.2f}", "#f39c12"),
+                ("MSE", f"{img_data['MSE']:.2f}" if not np.isnan(img_data['MSE']) else "N/A", "#34495e"),
+                ("PSNR", f"{img_data['PSNR']:.1f} dB" if not np.isnan(img_data['PSNR']) else "N/A", "#d35400"),
+                ("Compression", f"{img_data['Compression Ratio']:.2f}x", "#e74c3c")
+            ]
+            
+            for metric, value, color in metrics:
+                metric_widget = QWidget()
+                metric_layout = QHBoxLayout()
+                metric_widget.setLayout(metric_layout)
                 
-                size_mb = reference_size / (1024 * 1024)
-                info_layout.addWidget(QLabel(f"Size: {size_mb:.2f} MB"))
-            elif img_data:
-                # Add key metrics with color coding
-                metrics = [
-                    ("Compression", f"{img_data['Compression Ratio']:.2f}x", "#e74c3c"),
-                    ("PSNR", f"{img_data['PSNR']:.1f} dB" if not np.isnan(img_data['PSNR']) else "N/A", "#d35400"),
-                    ("SSIM", f"{img_data['SSIM']:.3f}" if not np.isnan(img_data['SSIM']) else "N/A", "#1abc9c"),
-                    ("ΔE", f"{img_data['Delta E (CIEDE2000)']:.2f}", "#2ecc71"),
-                    ("Size", f"{img_data['File Size (KB)']:.1f} KB", "#3498db")
-                ]
+                name = QLabel(metric)
+                name.setStyleSheet(f"color: {color}; font-weight: bold; min-width: 70px; font-size: 11px;")
+                metric_layout.addWidget(name)
                 
-                for metric, value, color in metrics:
-                    metric_widget = QWidget()
-                    metric_layout = QHBoxLayout()
-                    metric_widget.setLayout(metric_layout)
-                    
-                    name = QLabel(metric)
-                    name.setStyleSheet(f"color: {color}; font-weight: bold; min-width: 70px; font-size: 11px;")
-                    metric_layout.addWidget(name)
-                    
-                    val = QLabel(value)
-                    val.setStyleSheet("font-family: monospace; font-size: 11px;")
-                    metric_layout.addWidget(val)
-                    
-                    info_layout.addWidget(metric_widget)
+                val = QLabel(value)
+                val.setStyleSheet("font-family: monospace; font-size: 11px;")
+                metric_layout.addWidget(val)
+                
+                info_layout.addWidget(metric_widget)
             
             thumb_layout.addWidget(info_widget)
             self.thumbnail_container_layout.addWidget(thumb_widget)
