@@ -235,7 +235,6 @@ class ImageComparisonTool(QMainWindow):
         self.tabs.addTab(self.table_tab, "📊 Metrics Table")
         self.tabs.addTab(self.graph_tab, "📈 Visual Comparison")
         self.tabs.addTab(self.thumbnail_tab, "🖼️ Image Gallery")
-        
     
     def setupGraphStyles(self):
         self.metric_colors = {
@@ -243,7 +242,6 @@ class ImageComparisonTool(QMainWindow):
             'Compression Ratio': '#e74c3c',
             'Delta E (CIEDE2000)': '#2ecc71',
             'Entropy': '#f39c12',
-            'Bit Per Pixel': '#9b59b6',
             'SSIM': '#1abc9c',
             'PSNR': '#d35400',
             'MSE': '#34495e'
@@ -254,7 +252,6 @@ class ImageComparisonTool(QMainWindow):
             'Compression Ratio': 'Ratio',
             'Delta E (CIEDE2000)': 'ΔE',
             'Entropy': 'Bits',
-            'Bit Per Pixel': 'bpp',
             'SSIM': 'Index (0-1)',
             'PSNR': 'dB',
             'MSE': 'Error'
@@ -333,7 +330,8 @@ class ImageComparisonTool(QMainWindow):
                         'size': file_size,
                         'width': img.width,
                         'height': img.height,
-                        'entropy': shannon_entropy(img_array)
+                        'entropy': shannon_entropy(img_array),
+                        
                     }
                     continue
                 
@@ -406,7 +404,7 @@ class ImageComparisonTool(QMainWindow):
         # Create DataFrame from image data
         metrics = [
             'File Size (KB)', 'Compression Ratio', 'Delta E (CIEDE2000)',
-            'Entropy', 'Bit Per Pixel', 'SSIM', 'PSNR', 'MSE', 'Width', 'Height'
+            'Entropy', 'SSIM', 'PSNR', 'MSE', 'Width', 'Height'
         ]
         
         # Set up table
@@ -554,7 +552,6 @@ class ImageComparisonTool(QMainWindow):
             'PSNR',
             'Delta E (CIEDE2000)',
             'SSIM',
-            'Bit Per Pixel'
         ]
         
         filenames = [img['Filename'] for img in self.image_data]
